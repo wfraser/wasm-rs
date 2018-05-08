@@ -108,6 +108,10 @@ impl Read for Module {
                 other => other?,
             }
 
+            if section_reader.limit() != 0 {
+                return Err(Error::Invalid("section payload not fully consumed"));
+            }
+
             // restore the reader to one without limits
             r = section_reader.into_inner();
         }

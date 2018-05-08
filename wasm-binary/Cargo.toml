@@ -1,0 +1,9 @@
+[package]
+name = "wasm-binary"
+version = "0.1.0"
+authors = ["Bill Fraser <wfraser@codewise.org>"]
+
+[dependencies]
+enum-primitive-derive = "0.1"
+leb128 = "0.2"
+num-traits = "0.1"

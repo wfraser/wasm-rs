@@ -67,18 +67,18 @@ impl Read for ModuleHeader {
 
 #[derive(Debug, Default)]
 pub struct Module {
-    types: Vec<FuncType>,
-    imports: Vec<ImportEntry>,
-    functions: Vec<usize>,
-    table: Vec<TableType>,
-    memory: Vec<ResizableLimits>,
-    globals: Vec<GlobalEntry>,
-    exports: Vec<ExportEntry>,
-    start: Option<usize>,
-    elements: Vec<ElemSegment>,
-    code: Vec<FunctionBody>,
-    data: Vec<DataSegment>,
-    custom_sections: Vec<CustomSection>,
+    pub types: Vec<FuncType>,
+    pub imports: Vec<ImportEntry>,
+    pub functions: Vec<usize>,
+    pub tables: Vec<TableType>,
+    pub memory: Vec<MemoryType>,
+    pub globals: Vec<GlobalEntry>,
+    pub exports: Vec<ExportEntry>,
+    pub start: Option<usize>,
+    pub elements: Vec<ElemSegment>,
+    pub code: Vec<FunctionBody>,
+    pub data: Vec<DataSegment>,
+    pub custom_sections: Vec<CustomSection>,
 }
 
 impl Read for Module {
@@ -132,7 +132,7 @@ impl Module {
                     let t = FuncType::read(&mut section_reader)?;
                     self.types.push(t);
                 }
-            },
+            }
             SectionType::Import => {
                 let count = read_varu32(&mut section_reader)?;
                 self.imports.reserve(count as usize);
@@ -141,15 +141,102 @@ impl Module {
                     self.imports.push(entry);
                 }
             }
-            _ => return Err(Error::Invalid(UNIMPLEMENTED)), // FIXME: for testing purposes only
-            //_ => unimplemented!("unimplemented section {:?}", typ)
+            SectionType::Function => {
+                let count = read_varu32(&mut section_reader)?;
+                self.functions.reserve(count as usize);
+                for _ in 0 .. count {
+                    let idx = read_varu32(&mut section_reader)? as usize;
+                    if idx >= self.types.len() {
+                        return Err(Error::Invalid("function index out of range"));
+                    }
+                    self.functions.push(idx);
+                }
+            }
+            SectionType::Table => {
+                let count = read_varu32(&mut section_reader)?;
+                self.tables.reserve(count as usize);
+                for _ in 0 .. count {
+                    let table = TableType::read(&mut section_reader)?;
+                    self.tables.push(table);
+                }
+            }
+            SectionType::Memory => {
+                let count = read_varu32(&mut section_reader)?;
+                self.memory.reserve(count as usize);
+                for _ in 0 .. count {
+                    let memory = MemoryType::read(&mut section_reader)?;
+                    self.memory.push(memory);
+                }
+            }
+            SectionType::Global => {
+                let count = read_varu32(&mut section_reader)?;
+                self.globals.reserve(count as usize);
+                for _ in 0 .. count {
+                    let global = GlobalEntry::read(&mut section_reader)?;
+                    self.globals.push(global);
+                }
+            }
+            SectionType::Export => {
+                let count = read_varu32(&mut section_reader)?;
+                self.exports.reserve(count as usize);
+                for _ in 0 .. count {
+                    let export = ExportEntry::read(&mut section_reader)?;
+                    self.exports.push(export);
+                }
+            }
+            SectionType::Start => {
+                let index = read_varu32(&mut section_reader)? as usize;
+                if index >= self.functions.len() {
+                    return Err(Error::Invalid("start index out of range"));
+                }
+                self.start = Some(index);
+            }
+            SectionType::Element => {
+                let count = read_varu32(&mut section_reader)?;
+                self.elements.reserve(count as usize);
+                for _ in 0 .. count {
+                    let element = ElemSegment::read(&mut section_reader)?;
+
+                    // TODO: validate that the element index is in range
+                    // must be <= number of imported tables plus table section definitions
+
+                    // TODO: validate that indices are in range
+                    // must be <= number of imported functions plus function section definitions
+                    /*
+                    for idx in &element.elements {
+                        ...
+                    }
+                    */
+                    self.elements.push(element);
+                }
+            }
+            SectionType::Code => {
+                let count = read_varu32(&mut section_reader)?;
+                self.code.reserve(count as usize);
+                for _ in 0 .. count {
+                    let body = FunctionBody::read(&mut section_reader)?;
+                    self.code.push(body);
+                }
+            }
+            SectionType::Data => {
+                let count = read_varu32(&mut section_reader)?;
+                self.data.reserve(count as usize);
+                for _ in 0 .. count {
+                    let data = DataSegment::read(&mut section_reader)?;
+                    self.data.push(data);
+                }
+            }
+            SectionType::Custom => {
+                let section = CustomSection::read(&mut section_reader)?;
+                self.custom_sections.push(section);
+            }
         }
 
         Ok(())
     }
 }
 
-#[derive(Primitive, Debug)]
+#[derive(Primitive, Debug, Copy, Clone)]
 pub enum SectionType {
     Custom = 0x00,
     Type = 0x01,
@@ -266,7 +353,6 @@ impl Read for ElementType {
 #[derive(Debug)]
 pub struct FuncType {
     pub form: Type,
-    pub param_count: u32,
     pub param_types: Vec<ValueType>,
     pub return_type: Option<ValueType>,
 }
@@ -292,25 +378,53 @@ impl Read for FuncType {
 
         Ok(FuncType {
             form: typ,
-            param_count,
             param_types,
             return_type,
         })
     }
 }
 
-#[derive(Debug)]
+#[derive(Primitive, Debug)]
 pub enum ExternalKind {
+    Function = 0x00,
+    Table = 0x01,
+    Memory = 0x02,
+    Global = 0x03,
+}
+
+impl Read for ExternalKind {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        let mut buf = [0u8];
+        r.read_exact(&mut buf).map_err(Error::IO)?;
+        Self::from_u8(buf[0]).ok_or(Error::Invalid("invalid external kind"))
+    }
+}
+
+#[derive(Debug)]
+pub enum ExternalKindAndType {
     Function(usize),
     Table(TableType),
-    Memory(ResizableLimits),
+    Memory(MemoryType),
     Global(GlobalType),
+}
+
+impl Read for ExternalKindAndType {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        let kind = ExternalKind::read(&mut r)?;
+        let ret = match kind {
+            ExternalKind::Function => ExternalKindAndType::Function(read_varu32(&mut r)? as usize),
+            ExternalKind::Table => ExternalKindAndType::Table(TableType::read(&mut r)?),
+            ExternalKind::Memory => ExternalKindAndType::Memory(MemoryType::read(&mut r)?),
+            ExternalKind::Global => ExternalKindAndType::Global(GlobalType::read(&mut r)?),
+        };
+        Ok(ret)
+    }
 }
 
 #[derive(Debug)]
 pub struct TableType {
-    element_type: ElementType,
-    limits: ResizableLimits,
+    pub element_type: ElementType,
+    pub limits: ResizableLimits,
 }
 
 impl Read for TableType {
@@ -325,9 +439,23 @@ impl Read for TableType {
 }
 
 #[derive(Debug)]
+pub struct MemoryType {
+    pub limits: ResizableLimits,
+}
+
+impl Read for MemoryType {
+    fn read<R: io::Read>(r: R) -> Result<Self, Error> {
+        let limits = ResizableLimits::read(r)?;
+        Ok(MemoryType {
+            limits,
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct ResizableLimits {
-    initial_len: u32,
-    maximum_len: Option<u32>,
+    pub initial_len: u32,
+    pub maximum_len: Option<u32>,
 }
 
 impl Read for ResizableLimits {
@@ -348,8 +476,8 @@ impl Read for ResizableLimits {
 
 #[derive(Debug)]
 pub struct GlobalType {
-    content_type: ValueType,
-    mutable: bool,
+    pub content_type: ValueType,
+    pub mutable: bool,
 }
 
 impl Read for GlobalType {
@@ -365,24 +493,16 @@ impl Read for GlobalType {
 
 #[derive(Debug)]
 pub struct ImportEntry {
-    module_name: String,
-    field_name: String,
-    kind: ExternalKind,
+    pub module_name: String,
+    pub field_name: String,
+    pub kind: ExternalKindAndType,
 }
 
 impl Read for ImportEntry {
     fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
         let module_name = read_string(&mut r)?;
         let field_name = read_string(&mut r)?;
-        let mut kind_byte = [0u8];
-        r.read_exact(&mut kind_byte).map_err(Error::IO)?;
-        let kind = match kind_byte[0] {
-            0 => ExternalKind::Function(read_varu32(&mut r)? as usize),
-            1 => ExternalKind::Table(TableType::read(&mut r)?),
-            2 => ExternalKind::Memory(ResizableLimits::read(&mut r)?),
-            3 => ExternalKind::Global(GlobalType::read(&mut r)?),
-            _ => { return Err(Error::Invalid("unrecognized import entry kind")); }
-        };
+        let kind = ExternalKindAndType::read(&mut r)?;
         Ok(ImportEntry {
             module_name,
             field_name,
@@ -392,22 +512,176 @@ impl Read for ImportEntry {
 }
 
 #[derive(Debug)]
-pub struct GlobalEntry;
+pub struct GlobalEntry {
+    pub typ: GlobalType,
+    pub init: InitializerExpression,
+}
+
+impl Read for GlobalEntry {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        let typ = GlobalType::read(&mut r)?;
+        let init = InitializerExpression::read(&mut r)?;
+        Ok(GlobalEntry {
+            typ,
+            init,
+        })
+    }
+}
 
 #[derive(Debug)]
-pub struct ExportEntry;
+pub struct ExportEntry {
+    pub field_name: String,
+    pub kind: ExternalKind,
+    pub index: usize,
+}
+
+impl Read for ExportEntry {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        let field_name = read_string(&mut r)?;
+        let kind = ExternalKind::read(&mut r)?;
+        // TODO check that the index is in bounds
+        let index = read_varu32(&mut r)? as usize;
+        Ok(ExportEntry {
+            field_name,
+            kind,
+            index,
+        })
+    }
+}
 
 #[derive(Debug)]
-pub struct ElemSegment;
+pub struct ElemSegment {
+    pub index: usize,
+    pub offset: InitializerExpression,
+    pub elements: Vec<usize>, // indices into Function table
+}
+
+impl Read for ElemSegment {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        let index = read_varu32(&mut r)? as usize;
+        let offset = InitializerExpression::read(&mut r)?;
+        let num_elem = read_varu32(&mut r)? as usize;
+        let mut elements = Vec::with_capacity(num_elem);
+        for _ in 0 .. num_elem {
+            let element = read_varu32(&mut r)? as usize;
+            elements.push(element);
+        }
+        Ok(ElemSegment {
+            index,
+            offset,
+            elements,
+        })
+    }
+}
 
 #[derive(Debug)]
-pub struct FunctionBody;
+pub struct FunctionBody {
+    pub locals: Vec<LocalEntry>,
+    pub code: Vec<u8>,
+}
+
+impl Read for FunctionBody {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        use io::Read;
+
+        let body_size = read_varu32(&mut r)?;
+        let mut r = r.take(u64::from(body_size));
+
+        let local_count = read_varu32(&mut r)?;
+        let mut locals = Vec::with_capacity(local_count as usize);
+        for _ in 0 .. local_count {
+            let local = LocalEntry::read(&mut r)?;
+            locals.push(local);
+        }
+
+        let mut code = Vec::with_capacity(r.limit() as usize);
+        r.read_to_end(&mut code).map_err(Error::IO)?;
+        if code.last().cloned() != Some(0x0b) {
+            return Err(Error::Invalid("code does not end with END opcode"));
+        }
+
+        Ok(FunctionBody {
+            locals,
+            code,
+        })
+    }
+}
 
 #[derive(Debug)]
-pub struct DataSegment;
+pub struct LocalEntry {
+    pub count: u32,
+    pub typ: ValueType,
+}
+
+impl Read for LocalEntry {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        let count = read_varu32(&mut r)?;
+        let typ = ValueType::read(&mut r)?;
+        Ok(LocalEntry {
+            count,
+            typ,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct DataSegment {
+    index: u32,
+    offset: InitializerExpression,
+    data: Vec<u8>,
+}
+
+impl Read for DataSegment {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        use io::Read;
+        let index = read_varu32(&mut r)?;
+        let offset = InitializerExpression::read(&mut r)?;
+        let size = read_varu32(&mut r)?;
+        let mut data = Vec::with_capacity(size as usize);
+        r.take(u64::from(size)).read_to_end(&mut data).map_err(Error::IO)?;
+        Ok(DataSegment {
+            index,
+            offset,
+            data,
+        })
+    }
+}
 
 #[derive(Debug)]
 pub struct CustomSection {
-    name: String,
-    paylod: Vec<u8>,
+    pub name: String,
+    pub payload: Vec<u8>,
+}
+
+impl Read for CustomSection {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        let name = read_string(&mut r)?;
+        let mut payload = vec![];
+        r.read_to_end(&mut payload).map_err(Error::IO)?;
+        Ok(CustomSection {
+            name,
+            payload,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct InitializerExpression {
+    pub bytes: Vec<u8>, // TODO
+}
+
+impl Read for InitializerExpression {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        let mut bytes = vec![];
+        let mut buf = [0u8];
+        loop {
+            r.read_exact(&mut buf).map_err(Error::IO)?;
+            bytes.push(buf[0]);
+            if buf[0] == 0x0B { // END opcode
+                return Ok(InitializerExpression {
+                    bytes,
+                });
+            }
+        }
+    }
 }

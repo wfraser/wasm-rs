@@ -1,49 +1,17 @@
+use Error;
 use std::io;
-use leb128;
 use num_traits::FromPrimitive;
+use util::{read_string, read_varu1, read_varu32};
 
 // used as an escape hatch for debugging
 const UNIMPLEMENTED: &str = "UNIMPLEMENTED";
 
-#[derive(Debug)]
-pub enum Error {
-    Invalid(&'static str),
-    IO(io::Error),
-}
+pub const MAGIC_COOKIE: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
+pub const VERSION: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
 
 pub trait Read: Sized {
     fn read<R: io::Read>(r: R) -> Result<Self, Error>;
 }
-
-pub fn read_varu32<R: io::Read>(r: R) -> Result<u32, Error> {
-    let mut r2 = r.take(4);
-    match leb128::read::unsigned(&mut r2) {
-        Ok(n) => Ok(n as u32),
-        Err(leb128::read::Error::IoError(e)) => Err(Error::IO(e)),
-        Err(leb128::read::Error::Overflow) => Err(Error::Invalid("overflow in varuint32"))
-    }
-}
-
-fn read_varu1<R: io::Read>(r: R) -> Result<bool, Error> {
-    match read_varu32(r.take(1)) {
-        Ok(0) => Ok(false),
-        Ok(1) => Ok(true),
-        Ok(_) => Err(Error::Invalid("varuint1 out of range")),
-        Err(e) => Err(e),
-    }
-}
-
-fn read_string<R: io::Read>(mut r: R) -> Result<String, Error> {
-    use std::io::Read;
-    let len = read_varu32(&mut r)?;
-    let mut s = String::new();
-    r.take(u64::from(len)).read_to_string(&mut s)
-        .map_err(Error::IO)?;
-    Ok(s)
-}
-
-pub const MAGIC_COOKIE: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
-pub const VERSION: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
 
 #[derive(Debug)]
 pub struct ModuleHeader;

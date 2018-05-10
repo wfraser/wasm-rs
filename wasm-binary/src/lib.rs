@@ -2,12 +2,17 @@
 extern crate leb128;
 extern crate num_traits;
 
-pub mod details;
+pub mod module;
+mod util;
 
-pub use details::Error;
-pub use details::Module;
-
+pub use module::Module;
 use std::io;
+
+#[derive(Debug)]
+pub enum Error {
+    Invalid(&'static str),
+    IO(io::Error),
+}
 
 struct TrackedStream<R> {
     inner: R,
@@ -39,7 +44,7 @@ impl Module {
         // This is a convenience function so that users don't need to import the Read trait,
         // and also it keeps track and reports where in the input stream any error occurs.
         let mut r2 = TrackedStream::new(r);
-        details::Read::read(&mut r2)
+        module::Read::read(&mut r2)
             .map_err(|e| (e, r2.offset))
     }
 }

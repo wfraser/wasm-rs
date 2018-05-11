@@ -2,6 +2,7 @@
 extern crate leb128;
 extern crate num_traits;
 
+pub mod instructions;
 pub mod module;
 mod util;
 

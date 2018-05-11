@@ -10,5 +10,22 @@ fn main() {
         eprintln!("Error at {:#x}: {:?}", offset, e);
         std::process::exit(1);
     });
+
     println!("{:#?}", module);
+
+    for (i, func) in module.code.iter().enumerate() {
+        println!("function {} code:", i);
+        let n = func.code.len() as u64;
+        let mut reader = std::io::Cursor::new(&func.code);
+        while reader.position() != n {
+            print!("{:#x}/{:#x}: ", reader.position(), n);
+            let instr: wasm_binary::instructions::Instruction =
+            wasm_binary::module::Read::read(&mut reader)
+                .unwrap_or_else(|e| {
+                    eprintln!("Error at {:#x}: {:?}", reader.position(), e);
+                    std::process::exit(1);
+                });
+            println!("{:?}", instr);
+        }
+    }
 }

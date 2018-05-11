@@ -3,9 +3,6 @@ use std::io;
 use num_traits::FromPrimitive;
 use util::{read_string, read_varu1, read_varu32};
 
-// used as an escape hatch for debugging
-const UNIMPLEMENTED: &str = "UNIMPLEMENTED";
-
 pub const MAGIC_COOKIE: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
 pub const VERSION: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
 
@@ -71,10 +68,7 @@ impl Read for Module {
             // limit the bound of the reader for the duration of this section
             let mut section_reader = r.take(u64::from(len));
 
-            match module.read_section(section_type, &mut section_reader) {
-                Err(Error::Invalid(UNIMPLEMENTED)) => break,
-                other => other?,
-            }
+            module.read_section(section_type, &mut section_reader)?;
 
             if section_reader.limit() != 0 {
                 return Err(Error::Invalid("section payload not fully consumed"));

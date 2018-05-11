@@ -28,4 +28,14 @@ fn main() {
             println!("{:?}", instr);
         }
     }
+
+    if let Some(s) = module.custom_sections.iter().find(|s| s.name == "name") {
+        println!("debugging symbols:");
+        let decoded = wasm_binary::name_section::NameSection::read(&s.payload)
+            .unwrap_or_else(|e| {
+                eprintln!("malformed name section: {:?}", e);
+                std::process::exit(1);
+            });
+        println!("{:#?}", decoded);
+    }
 }

@@ -4,6 +4,7 @@ extern crate num_traits;
 
 pub mod instructions;
 pub mod module;
+pub mod name_section;
 mod util;
 
 pub use module::Module;

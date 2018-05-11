@@ -12,6 +12,7 @@ fn main() {
     });
 
     println!("{:#?}", module);
+    println!();
 
     for (i, func) in module.code.iter().enumerate() {
         println!("function {} code:", i);
@@ -27,15 +28,18 @@ fn main() {
                 });
             println!("{:?}", instr);
         }
+        println!();
     }
 
     if let Some(s) = module.custom_sections.iter().find(|s| s.name == "name") {
         println!("debugging symbols:");
-        let decoded = wasm_binary::name_section::NameSection::read(&s.payload)
+        let decoded = wasm_binary::name_section::SymbolTable::from_bytes(&s.payload)
             .unwrap_or_else(|e| {
                 eprintln!("malformed name section: {:?}", e);
                 std::process::exit(1);
             });
         println!("{:#?}", decoded);
+    } else {
+        println!("no debugging symbols");
     }
 }

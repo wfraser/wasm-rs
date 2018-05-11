@@ -1,48 +1,74 @@
+//! Structures representing the innards of a WASM module.
+
 use Error;
+use instructions::Opcode;
 use std::io;
 use num_traits::FromPrimitive;
 use util::{read_string, read_varu1, read_varu32};
 
+/// The magic cookie present at the start of all WASM files. Looks like `"\0ASM"`.
 pub const MAGIC_COOKIE: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
+
+/// The version field in the WASM header. Currently set at `1u32`.
 pub const VERSION: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
 
+/// A trait that a type can implement to allow reading it from any arbitrary `Read` impl and
+/// returning appropriate errors.
 pub trait Read: Sized {
     fn read<R: io::Read>(r: R) -> Result<Self, Error>;
 }
 
-#[derive(Debug)]
-pub struct ModuleHeader;
-
-impl Read for ModuleHeader {
-    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
-        let mut buf = [0u8; 4];
-        r.read_exact(&mut buf).map_err(Error::IO)?;
-        if buf != MAGIC_COOKIE {
-            return Err(Error::Invalid("invalid magic cookie in module header"));
-        }
-
-        r.read_exact(&mut buf).map_err(Error::IO)?;
-        if buf != VERSION {
-            return Err(Error::Invalid("unsupported version in module header"));
-        }
-
-        Ok(ModuleHeader)
-    }
-}
-
+/// Represents a WASM module and all its sections.
+///
+/// This struct does not parse the contents of any code sequences or custom sections, but keeps
+/// their data as byte vectors that can be interpreted later. See the `instructions` and
+/// `name_section` modules for doing that.
+///
+/// Note that a number of things in this structure include "index" fields. These are references to
+/// things defined elsewhere in the module -- functions, globals, memory, tables, and types -- and
+/// sometimes which one is referred to depends on context. The lists referred to also include
+/// imports in addition to ones defined in the module itself. The order always is the order of
+/// definition in the module, with entries in `imports` coming first, then internally-defined ones
+/// from the appropriate field.
 #[derive(Debug, Default)]
 pub struct Module {
+    /// The types the module defines.
     pub types: Vec<FuncType>,
+
+    /// Items the module wants to import from its environment.
     pub imports: Vec<ImportEntry>,
+
+    /// Type signatures of functions the module defines internally. The number is an index into the
+    /// `types` list.
     pub functions: Vec<usize>,
+
+    /// Tables defined in the module.
     pub tables: Vec<TableType>,
+
+    /// Memory defined by the module.
     pub memory: Vec<MemoryType>,
+
+    /// Global variables defined by the module, including their types and how to initialize them.
     pub globals: Vec<GlobalEntry>,
+
+    /// Things the module exports to the environment.
     pub exports: Vec<ExportEntry>,
+
+    /// The index of the start function of the module, if any.
     pub start: Option<usize>,
+
+    /// Elements defined by the module, which allow for initializing imported or internally defined
+    /// tables.
     pub elements: Vec<ElemSegment>,
+
+    /// Function bodies for each function defined by the module.
     pub code: Vec<FunctionBody>,
+
+    /// Data segments to be loaded into the module's memory at instantiation time.
     pub data: Vec<DataSegment>,
+
+    /// Any number of "custom" sections, used for extending the WASM format. They are identified by
+    /// name.
     pub custom_sections: Vec<CustomSection>,
 }
 
@@ -211,6 +237,27 @@ impl Module {
     }
 }
 
+/// The module header. Contains no information other than the constant magic numbers.
+#[derive(Debug)]
+pub struct ModuleHeader;
+
+impl Read for ModuleHeader {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
+        let mut buf = [0u8; 4];
+        r.read_exact(&mut buf).map_err(Error::IO)?;
+        if buf != MAGIC_COOKIE {
+            return Err(Error::Invalid("invalid magic cookie in module header"));
+        }
+
+        r.read_exact(&mut buf).map_err(Error::IO)?;
+        if buf != VERSION {
+            return Err(Error::Invalid("unsupported version in module header"));
+        }
+
+        Ok(ModuleHeader)
+    }
+}
+
 #[derive(Primitive, Debug, Copy, Clone, PartialEq, PartialOrd)]
 pub enum SectionType {
     Custom = 0x00,
@@ -250,6 +297,7 @@ impl Read for SectionHeader {
     }
 }
 
+/// The set of types currently supported by WASM.
 #[derive(Primitive, Debug, PartialEq)]
 pub enum Type {
     I32 = 0x7f,
@@ -269,6 +317,7 @@ impl Read for Type {
     }
 }
 
+/// Types that a value can be.
 #[derive(Debug)]
 pub enum ValueType {
     I32,
@@ -289,6 +338,7 @@ impl Read for ValueType {
     }
 }
 
+/// Types that a block may return.
 #[derive(Debug)]
 pub enum BlockType {
     I32,
@@ -311,6 +361,7 @@ impl Read for BlockType {
     }
 }
 
+/// Types that an element may be.
 #[derive(Debug)]
 pub enum ElementType {
     Anyfunc,
@@ -325,9 +376,9 @@ impl Read for ElementType {
     }
 }
 
+/// Represents a function signature: its parameter count and types, and return type.
 #[derive(Debug)]
 pub struct FuncType {
-    pub form: Type,
     pub param_types: Vec<ValueType>,
     pub return_type: Option<ValueType>,
 }
@@ -352,7 +403,6 @@ impl Read for FuncType {
         };
 
         Ok(FuncType {
-            form: typ,
             param_types,
             return_type,
         })
@@ -375,22 +425,25 @@ impl Read for ExternalKind {
     }
 }
 
+/// The type of an external thing, used in imports and exports.
 #[derive(Debug)]
-pub enum ExternalKindAndType {
+pub enum ExternalType {
+    /// References a function type defined in the `functions` section of this module.
     Function(usize),
+
     Table(TableType),
     Memory(MemoryType),
     Global(GlobalType),
 }
 
-impl Read for ExternalKindAndType {
+impl Read for ExternalType {
     fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
         let kind = ExternalKind::read(&mut r)?;
         let ret = match kind {
-            ExternalKind::Function => ExternalKindAndType::Function(read_varu32(&mut r)? as usize),
-            ExternalKind::Table => ExternalKindAndType::Table(TableType::read(&mut r)?),
-            ExternalKind::Memory => ExternalKindAndType::Memory(MemoryType::read(&mut r)?),
-            ExternalKind::Global => ExternalKindAndType::Global(GlobalType::read(&mut r)?),
+            ExternalKind::Function => ExternalType::Function(read_varu32(&mut r)? as usize),
+            ExternalKind::Table => ExternalType::Table(TableType::read(&mut r)?),
+            ExternalKind::Memory => ExternalType::Memory(MemoryType::read(&mut r)?),
+            ExternalKind::Global => ExternalType::Global(GlobalType::read(&mut r)?),
         };
         Ok(ret)
     }
@@ -398,7 +451,10 @@ impl Read for ExternalKindAndType {
 
 #[derive(Debug)]
 pub struct TableType {
+    /// The type of the table
     pub element_type: ElementType,
+
+    /// Initial and max size of the table.
     pub limits: ResizableLimits,
 }
 
@@ -413,6 +469,7 @@ impl Read for TableType {
     }
 }
 
+/// Defines a memory area, including its initial and maximum size.
 #[derive(Debug)]
 pub struct MemoryType {
     pub limits: ResizableLimits,
@@ -430,6 +487,8 @@ impl Read for MemoryType {
 #[derive(Debug)]
 pub struct ResizableLimits {
     pub initial_len: u32,
+
+    /// Maximum size, if any. If `None`, it may grow unbounded.
     pub maximum_len: Option<u32>,
 }
 
@@ -470,18 +529,18 @@ impl Read for GlobalType {
 pub struct ImportEntry {
     pub module_name: String,
     pub field_name: String,
-    pub kind: ExternalKindAndType,
+    pub typ: ExternalType,
 }
 
 impl Read for ImportEntry {
     fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
         let module_name = read_string(&mut r)?;
         let field_name = read_string(&mut r)?;
-        let kind = ExternalKindAndType::read(&mut r)?;
+        let typ = ExternalType::read(&mut r)?;
         Ok(ImportEntry {
             module_name,
             field_name,
-            kind,
+            typ,
         })
     }
 }
@@ -571,7 +630,7 @@ impl Read for FunctionBody {
 
         let mut code = Vec::with_capacity(r.limit() as usize);
         r.read_to_end(&mut code).map_err(Error::IO)?;
-        if code.last().cloned() != Some(0x0b) {
+        if code.last().cloned() != Some(Opcode::End as u8) {
             return Err(Error::Invalid("code does not end with END opcode"));
         }
 
@@ -642,7 +701,7 @@ impl Read for CustomSection {
 
 #[derive(Debug)]
 pub struct InitializerExpression {
-    pub bytes: Vec<u8>, // TODO
+    pub bytes: Vec<u8>,
 }
 
 impl Read for InitializerExpression {
@@ -652,7 +711,7 @@ impl Read for InitializerExpression {
         loop {
             r.read_exact(&mut buf).map_err(Error::IO)?;
             bytes.push(buf[0]);
-            if buf[0] == 0x0B { // END opcode
+            if buf[0] == Opcode::End as u8 {
                 return Ok(InitializerExpression {
                     bytes,
                 });

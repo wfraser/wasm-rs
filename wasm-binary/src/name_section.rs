@@ -1,3 +1,6 @@
+//! Structures representing the "name" custom section, which provides debugging info in the wasm
+//! file.
+
 use Error;
 use module::Read;
 use util::{read_varu32, read_string};
@@ -5,18 +8,25 @@ use std::io;
 use std::collections::btree_map::*;
 use num_traits::FromPrimitive;
 
+/// Represents the information in the "name" custom section as a mapping.
 #[derive(Debug, Default)]
 pub struct SymbolTable {
+    /// The name of the module, if present.
     pub module_name: Option<String>,
+
+    /// A mapping from function index to the name of the function and then a mapping from local
+    /// variable index to their name. Either the function name or the locals map may not be present.
     pub functions: Option<BTreeMap<usize, SymbolTableEntry>>,
 }
 
 impl SymbolTable {
+    /// Read the symbol table from the bytes of the payload in the "name" custom section.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         let section = NameSection::read(bytes)?;
         Self::from_section(section)
     }
 
+    /// Read the symbol table from an already parsed-out `NameSection` struct.
     pub fn from_section(section: NameSection) -> Result<Self, Error> {
         let mut table = Self::default();
         for subsection in section.subsections {
@@ -65,9 +75,14 @@ impl SymbolTable {
     }
 }
 
+/// An entry in the symbol table for a single function.
+/// At least one of `name` or `locals` will not be `None`.
 #[derive(Debug)]
 pub struct SymbolTableEntry {
+    /// The name of the function, if present.
     name: Option<String>,
+
+    /// A mapping from local variable index to variable name, if locals info is present.
     locals: Option<BTreeMap<usize, String>>,
 }
 

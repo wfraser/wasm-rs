@@ -51,6 +51,7 @@ impl Read for Module {
         ModuleHeader::read(&mut r)?;
         let mut module = Module::default();
 
+        let mut prev_section: Option<SectionType> = None;
         loop {
             // don't use SectionHeader::read here, because we need to know if we're exactly at the
             // end of the input.
@@ -63,9 +64,21 @@ impl Read for Module {
                 },
                 Err(e) => { return Err(e) },
             };
-            let len = read_varu32(&mut r)?;
 
-            // limit the bound of the reader for the duration of this section
+            // Validate that sections are present only once, and in order, except for Custom, which
+            // can be specified multiple times must must be after any others.
+            if let Some(prev) = prev_section.take() {
+                if prev == SectionType::Custom && section_type != SectionType::Custom {
+                    return Err(Error::Invalid("non-custom section after custom section"));
+                }
+                else if section_type != SectionType::Custom && section_type <= prev {
+                    return Err(Error::Invalid("section out of order or duplicated"));
+                }
+            }
+            prev_section = Some(section_type);
+
+            // limit the bound of the reader to the length of this section
+            let len = read_varu32(&mut r)?;
             let mut section_reader = r.take(u64::from(len));
 
             module.read_section(section_type, &mut section_reader)?;
@@ -198,7 +211,7 @@ impl Module {
     }
 }
 
-#[derive(Primitive, Debug, Copy, Clone)]
+#[derive(Primitive, Debug, Copy, Clone, PartialEq, PartialOrd)]
 pub enum SectionType {
     Custom = 0x00,
     Type = 0x01,

@@ -608,7 +608,6 @@ impl Read for ElemSegment {
     }
 }
 
-#[derive(Debug)]
 pub struct FunctionBody {
     pub locals: Vec<LocalEntry>,
     pub code: Vec<u8>,
@@ -641,6 +640,23 @@ impl Read for FunctionBody {
     }
 }
 
+impl ::std::fmt::Debug for FunctionBody {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        f.write_str("FunctionBody {\n")?;
+        f.write_fmt(format_args!("    locals: {:?}\n", self.locals))?;
+        f.write_str("    code: {")?;
+        for (i, byte) in self.code.iter().enumerate() {
+            if i % 16 == 0 {
+                f.write_str("\n        ")?;
+            } else if i % 8 == 0 {
+                f.write_str(" ")?;
+            }
+            f.write_fmt(format_args!("{:02x} ", byte))?;
+        }
+        f.write_str("\n    }\n}")
+    }
+}
+
 #[derive(Debug)]
 pub struct LocalEntry {
     pub count: u32,
@@ -658,7 +674,6 @@ impl Read for LocalEntry {
     }
 }
 
-#[derive(Debug)]
 pub struct DataSegment {
     index: u32,
     offset: InitializerExpression,
@@ -681,7 +696,24 @@ impl Read for DataSegment {
     }
 }
 
-#[derive(Debug)]
+impl ::std::fmt::Debug for DataSegment {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        f.write_str("DataSegment {\n")?;
+        f.write_fmt(format_args!("    index: {}\n", self.index))?;
+        f.write_fmt(format_args!("    offset: {:?}\n", self.offset))?;
+        f.write_str("    data: {")?;
+        for (i, byte) in self.data.iter().enumerate() {
+            if i % 16 == 0 {
+                f.write_str("\n        ")?;
+            } else if i % 8 == 0 {
+                f.write_str(" ")?;
+            }
+            f.write_fmt(format_args!("{:02x} ", byte))?;
+        }
+        f.write_str("\n    }\n}")
+    }
+}
+
 pub struct CustomSection {
     pub name: String,
     pub payload: Vec<u8>,
@@ -696,6 +728,21 @@ impl Read for CustomSection {
             name,
             payload,
         })
+    }
+}
+
+impl ::std::fmt::Debug for CustomSection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        f.write_fmt(format_args!("CustomSection {:?} {{", self.name))?;
+        for (i, byte) in self.payload.iter().enumerate() {
+            if i % 16 == 0 {
+                f.write_str("\n    ")?;
+            } else if i % 8 == 0 {
+                f.write_str(" ")?;
+            }
+            f.write_fmt(format_args!("{:02x} ", byte))?;
+        }
+        f.write_str("\n}")
     }
 }
 

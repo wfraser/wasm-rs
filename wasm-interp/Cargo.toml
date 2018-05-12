@@ -1,9 +1,8 @@
 [package]
-name = "demo"
+name = "wasm-interp"
 version = "0.1.0"
 authors = ["Bill Fraser <wfraser@codewise.org>"]
 
 [dependencies]
-stderrlog = "0.4"
+log = "0.4"
 wasm-binary = { path = "../wasm-binary" }
-wasm-interp = { path = "../wasm-interp" }

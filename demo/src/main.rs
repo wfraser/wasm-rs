@@ -1,6 +1,13 @@
 extern crate wasm_binary;
+extern crate wasm_interp;
+extern crate stderrlog;
 
 fn main() {
+    stderrlog::new()
+        .verbosity(4)
+        .init()
+        .unwrap();
+
     let mut f = std::fs::File::open(
         std::env::args_os().nth(1)
             .expect("need a file to open"))
@@ -42,4 +49,8 @@ fn main() {
     } else {
         println!("no debugging symbols");
     }
+
+    println!("\ninstantiating module");
+    std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).unwrap();
+    wasm_interp::instantiate_module(f).unwrap();
 }

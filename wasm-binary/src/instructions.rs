@@ -2,6 +2,7 @@ use Error;
 use module::{self, BlockType};
 use util::{read_varu32, read_varu1, read_vari32, read_vari64, read_f32, read_f64};
 use num_traits::FromPrimitive;
+use std::io;
 
 #[derive(Primitive, Debug)]
 pub enum Opcode {
@@ -213,7 +214,7 @@ impl Opcode {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Instruction {
     Unreachable,
     Nop,
@@ -233,11 +234,12 @@ pub enum Instruction {
     Return,
     Drop,
     Select,
-    GetLocal(u32),
-    SetLocal(u32),
-    TeeLocal(u32),
-    GetGlobal(u32),
-    SetGlobal(u32),
+
+    GetLocal(usize),
+    SetLocal(usize),
+    TeeLocal(usize),
+    GetGlobal(usize),
+    SetGlobal(usize),
 
     I32Load(MemoryImmediate),
     I64Load(MemoryImmediate),
@@ -409,7 +411,7 @@ pub enum Instruction {
 }
 
 impl module::Read for Instruction {
-    fn read<R: ::std::io::Read>(mut r: R) -> Result<Self, Error> {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
         let mut buf = [0u8];
         r.read_exact(&mut buf).map_err(Error::IO)?;
         let op = Opcode::from_u8(buf[0])?;
@@ -448,11 +450,11 @@ impl module::Read for Instruction {
             Opcode::Drop => Instruction::Drop,
             Opcode::Select => Instruction::Select,
 
-            Opcode::GetLocal => Instruction::GetLocal(read_varu32(r)?),
-            Opcode::SetLocal => Instruction::SetLocal(read_varu32(r)?),
-            Opcode::TeeLocal => Instruction::TeeLocal(read_varu32(r)?),
-            Opcode::GetGlobal => Instruction::GetGlobal(read_varu32(r)?),
-            Opcode::SetGlobal => Instruction::SetGlobal(read_varu32(r)?),
+            Opcode::GetLocal => Instruction::GetLocal(read_varu32(r)? as usize),
+            Opcode::SetLocal => Instruction::SetLocal(read_varu32(r)? as usize),
+            Opcode::TeeLocal => Instruction::TeeLocal(read_varu32(r)? as usize),
+            Opcode::GetGlobal => Instruction::GetGlobal(read_varu32(r)? as usize),
+            Opcode::SetGlobal => Instruction::SetGlobal(read_varu32(r)? as usize),
 
             Opcode::I32Load => Instruction::I32Load(MemoryImmediate::read(r)?),
             Opcode::I64Load => Instruction::I64Load(MemoryImmediate::read(r)?),
@@ -637,14 +639,24 @@ impl module::Read for Instruction {
     }
 }
 
-#[derive(Debug)]
+pub fn read_instructions(bytes: &[u8]) -> Result<Vec<Instruction>, Error> {
+    let mut seq = vec![];
+    let mut reader = io::Cursor::new(bytes);
+    while reader.position() != bytes.len() as u64 {
+        let instr = module::Read::read(&mut reader)?;
+        seq.push(instr);
+    }
+    Ok(seq)
+}
+
+#[derive(Debug, PartialEq)]
 pub struct MemoryImmediate {
-    flags: u32,
-    offset: u32,
+    pub flags: u32,
+    pub offset: u32,
 }
 
 impl module::Read for MemoryImmediate {
-    fn read<R: ::std::io::Read>(mut r: R) -> Result<Self, Error> {
+    fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
         let flags = read_varu32(&mut r)?;
         let offset = read_varu32(&mut r)?;
         Ok(MemoryImmediate {

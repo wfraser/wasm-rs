@@ -4,6 +4,7 @@ use Error;
 use instructions::Opcode;
 use std::io;
 use num_traits::FromPrimitive;
+use instructions::Instruction;
 use util::{read_string, read_varu1, read_varu32};
 
 /// The magic cookie present at the start of all WASM files. Looks like `"\0ASM"`.
@@ -318,7 +319,7 @@ impl Read for Type {
 }
 
 /// Types that a value can be.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ValueType {
     I32,
     I64,
@@ -339,7 +340,7 @@ impl Read for ValueType {
 }
 
 /// Types that a block may return.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum BlockType {
     I32,
     I64,
@@ -675,15 +676,18 @@ impl Read for LocalEntry {
 }
 
 pub struct DataSegment {
-    index: u32,
-    offset: InitializerExpression,
-    data: Vec<u8>,
+    pub index: u32,
+    pub offset: InitializerExpression,
+    pub data: Vec<u8>,
 }
 
 impl Read for DataSegment {
     fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
         use io::Read;
         let index = read_varu32(&mut r)?;
+        if index != 0 {
+            return Err(Error::Invalid("data segment index out of range (only 0 is supported)"));
+        }
         let offset = InitializerExpression::read(&mut r)?;
         let size = read_varu32(&mut r)?;
         let mut data = Vec::with_capacity(size as usize);
@@ -764,5 +768,40 @@ impl Read for InitializerExpression {
                 });
             }
         }
+    }
+}
+
+impl InitializerExpression {
+    /// Parse the initializer expression bytes into a sequence of instructions. This function does
+    /// not include the terminating `End` instruction.
+    ///
+    /// Note that while it is currently only allowed to have 2 instructions -- a constant or a
+    /// global load, followed by `End` -- future versions of WASM may allow arithmetic as well,
+    /// which is why this returns a Vec.
+    pub fn instructions(&self) -> Result<Vec<Instruction>, Error> {
+        let mut instructions = ::instructions::read_instructions(&self.bytes)?;
+        if instructions.pop() != Some(Instruction::End) {
+            return Err(Error::Invalid("initializer expression must end with End"));
+        }
+
+        if instructions.len() != 1 {
+            return Err(Error::Invalid("initializer expression must be two instructions"));
+        }
+
+        // Validate that it contains only allowed operations.
+        for i in &instructions {
+            match *i {
+                Instruction::I32Const(_)
+                    | Instruction::I64Const(_)
+                    | Instruction::F32Const(_)
+                    | Instruction::F64Const(_)
+                    | Instruction::GetGlobal(_) => (),
+                _ => {
+                    return Err(Error::Invalid(
+                        "initializer expression may only be a constant or get_global"));
+                }
+            }
+        }
+        Ok(instructions)
     }
 }

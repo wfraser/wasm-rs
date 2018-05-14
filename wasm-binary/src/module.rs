@@ -319,7 +319,7 @@ impl Read for Type {
 }
 
 /// Types that a value can be.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ValueType {
     I32,
     I64,
@@ -378,7 +378,7 @@ impl Read for ElementType {
 }
 
 /// Represents a function signature: its parameter count and types, and return type.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FuncType {
     pub param_types: Vec<ValueType>,
     pub return_type: Option<ValueType>,
@@ -658,7 +658,7 @@ impl ::std::fmt::Debug for FunctionBody {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LocalEntry {
     pub count: u32,
     pub typ: ValueType,

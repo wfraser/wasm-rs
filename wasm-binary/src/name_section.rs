@@ -80,10 +80,10 @@ impl SymbolTable {
 #[derive(Debug)]
 pub struct SymbolTableEntry {
     /// The name of the function, if present.
-    name: Option<String>,
+    pub name: Option<String>,
 
     /// A mapping from local variable index to variable name, if locals info is present.
-    locals: Option<BTreeMap<usize, String>>,
+    pub locals: Option<BTreeMap<usize, String>>,
 }
 
 // Below here are lower-level structs that more closely match the format that's actually in the

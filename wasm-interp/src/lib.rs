@@ -63,13 +63,10 @@ impl ::std::fmt::Debug for FunctionDefinition {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         match self {
             FunctionDefinition::Internal { locals, instructions } => {
-                f.write_str("FunctionDefinition::Internal {\n")?;
-                f.write_fmt(format_args!("    locals: {:?}\n", locals))?;
-                f.write_str("    instructions: [\n")?;
-                for i in instructions {
-                    f.write_fmt(format_args!("        {:?}\n", i))?;
-                }
-                f.write_str("}\n")
+                f.debug_struct("FunctionDefinition::Internal")
+                    .field("locals", locals)
+                    .field("instructions", instructions)
+                    .finish()
             }
             FunctionDefinition::Import(_) => {
                 f.write_str("FunctionDefinition::Import(_)\n")
@@ -89,11 +86,21 @@ pub struct ModuleEnvironment {
     symtab: Option<wasm_binary::name_section::SymbolTable>,
 }
 
+impl ModuleEnvironment {
+    fn function_name(&self, index: usize) -> Option<&str> {
+        self.symtab.as_ref()
+            .and_then(|table| table.functions.as_ref())
+            .and_then(|funcs| funcs.get(&index))
+            .and_then(|func| func.name.as_ref())
+            .map(|s| s.as_str())
+    }
+}
+
 impl ::std::fmt::Debug for ModuleEnvironment {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         f.write_str("ModuleEnvironment {\n")?;
-        f.write_str("    memory: {")?;
 
+        f.write_str("    memory: {")?;
         /*
         for (i, byte) in self.memory.iter().enumerate() {
             if i % 16 == 0 {
@@ -105,12 +112,41 @@ impl ::std::fmt::Debug for ModuleEnvironment {
         }
         */
         f.write_fmt(format_args!("\n    <skipped {} bytes>", self.memory.len()))?;
-
         f.write_str("\n    }\n")?;
-        // FIXME: this writes the functions indented one level too few.
+
+        // Rather than delegating to FunctionDefinition's Debug impl here, iterate over and print
+        // the code ourselves. This lets us try to use symbol table info to include names of things.
         for (i, fun) in self.functions.iter().enumerate() {
-            f.write_fmt(format_args!("    Function {}: {:?}\n", i, fun))?;
+            let name = self.function_name(i).unwrap_or("?");
+            f.write_fmt(format_args!("    Function {} ({}): {{\n", i, name))?;
+            f.write_fmt(format_args!("        signature: {:?}\n", fun.signature))?;
+            match fun.definition {
+                FunctionDefinition::Internal { ref locals, ref instructions } => {
+                    f.write_str("        definition: FunctionDefinition::Internal {\n")?;
+                    f.write_fmt(format_args!("            locals: {:?}\n", locals))?;
+                    f.write_fmt(format_args!("            instructions: ({}) [\n", instructions.len()))?;
+                    for i in instructions {
+                        match i {
+                            Instruction::Call(index) => {
+                                if let Some(name) = self.function_name(*index as usize) {
+                                    f.write_fmt(format_args!("                Call({})\n", name))?;
+                                } else {
+                                    f.write_fmt(format_args!("                Call({})\n", index))?;
+                                }
+                            }
+                            _ => f.write_fmt(format_args!("                {:?}\n", i))?
+                        }
+                    }
+                    f.write_str("            ]\n")?;
+                    f.write_str("        }\n")?;
+                },
+                FunctionDefinition::Import(_) => {
+                    f.write_str("        definition: FunctionDefinition::Import(_)\n")?;
+                }
+            }
+            f.write_str("    }\n")?;
         }
+
         f.write_fmt(format_args!("    start: {:?}\n", self.start))?;
         f.write_str("}\n")
     }

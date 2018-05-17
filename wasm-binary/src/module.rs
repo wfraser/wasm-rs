@@ -410,7 +410,7 @@ impl Read for FuncType {
     }
 }
 
-#[derive(Primitive, Debug)]
+#[derive(Primitive, Debug, PartialEq, Copy, Clone)]
 pub enum ExternalKind {
     Function = 0x00,
     Table = 0x01,

@@ -66,6 +66,10 @@ fn main() {
     let env = wasm_interp::HostEnvironment {
         functions,
     };
-    let module_env = wasm_interp::instantiate_module(f, env).unwrap();
+    let mut module_env = wasm_interp::instantiate_module(f, env).unwrap();
     println!("\n{:#?}", module_env);
+
+    println!("running the thing");
+    let result = module_env.call_function("main", &[]).unwrap();
+    println!("result = {:?}", result);
 }

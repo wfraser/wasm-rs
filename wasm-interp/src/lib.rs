@@ -16,6 +16,7 @@ pub enum Error {
     BinaryFormat(&'static str, u64),
     Instantiation(&'static str),
     MissingImport { module: String, field: String },
+    InvalidOperation(&'static str),
 }
 
 impl From<wasm_binary::Error> for Error {
@@ -79,10 +80,13 @@ pub struct HostEnvironment {
     pub functions: HashMap<String, ImportFunction>,
 }
 
+type Stack = Vec<Value>;
+
 pub struct ModuleEnvironment {
     memory: Vec<u8>,
     functions: Vec<Function>,
     start: Option<usize>,
+    exports: HashMap<String, (module::ExternalKind, usize)>,
     symtab: Option<wasm_binary::name_section::SymbolTable>,
 }
 
@@ -93,6 +97,31 @@ impl ModuleEnvironment {
             .and_then(|funcs| funcs.get(&index))
             .and_then(|func| func.name.as_ref())
             .map(|s| s.as_str())
+    }
+
+    pub fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Option<Value>, Error> {
+        let (kind, idx) = self.exports
+            .get(name)
+            .cloned()
+            .ok_or(Error::InvalidOperation("no such export"))?;
+        if kind != module::ExternalKind::Function {
+            return Err(Error::InvalidOperation("export is not a function"));
+        }
+        debug!("running function {:?}, index {}", name, idx);
+        let mut stack = Stack::new();
+
+        // TODO: check the declared type of the function before pushing args
+        stack.extend_from_slice(args);
+
+        self.call(idx, &mut stack)?;
+
+        // TODO: check the declared type of the function before returning
+        Ok(stack.pop())
+    }
+
+    fn call(&mut self, idx: usize, stack: &mut Stack) -> Result<(), Error> {
+        stack.push(Value::I32(31337));
+        Ok(())
     }
 }
 
@@ -272,6 +301,11 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
     // TODO: global instantiation
     // TODO: build exports map
 
+    let mut exports = HashMap::new();
+    for entry in module.exports {
+        exports.insert(entry.field_name, (entry.kind, entry.index));
+    }
+
     let symtab = module.custom_sections
         .iter()
         .find(|section| section.name == "name")
@@ -287,6 +321,7 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
         memory,
         functions,
         start: module.start,
+        exports,
         symtab,
     })
 }

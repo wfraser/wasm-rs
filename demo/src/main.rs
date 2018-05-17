@@ -1,6 +1,7 @@
 extern crate wasm_binary;
 extern crate wasm_interp;
 extern crate stderrlog;
+use std::collections::HashMap;
 
 fn main() {
     stderrlog::new()
@@ -52,5 +53,19 @@ fn main() {
 
     println!("\ninstantiating module");
     std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).unwrap();
-    wasm_interp::instantiate_module(f).unwrap();
+
+    // This host environment is for the file `hello.wasm`. For now, it's just debugging stubs that
+    // don't even return the right type.
+    let mut functions = HashMap::new();
+    for f in &["putc_js", "__syscall0", "__syscall1", "__syscall3", "__syscall4", "__syscall5"] {
+        functions.insert(f.to_string(), wasm_interp::make_import_function(move |args| {
+            println!("{}: {:?}", f, args);
+            None
+        }));
+    }
+    let env = wasm_interp::HostEnvironment {
+        functions,
+    };
+    let module_env = wasm_interp::instantiate_module(f, env).unwrap();
+    println!("\n{:#?}", module_env);
 }

@@ -35,8 +35,17 @@ pub enum Value {
     F64(f64),
 }
 
+/// Helper function to aid in making the right boxed function type, because rustc's type inference
+/// makes it awkward otherwise.
+pub fn make_import_function<F: 'static + Fn(Vec<Value>) -> Option<Value>>(f: F)
+    -> ImportFunction
+{
+    Box::new(f)
+}
+
 pub type ImportFunction = Box<Fn(Vec<Value>) -> Option<Value>>;
 
+#[derive(Debug)]
 pub struct Function {
     signature: module::FuncType,
     definition: FunctionDefinition,
@@ -50,14 +59,61 @@ enum FunctionDefinition {
     Import(ImportFunction),
 }
 
+impl ::std::fmt::Debug for FunctionDefinition {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        match self {
+            FunctionDefinition::Internal { locals, instructions } => {
+                f.write_str("FunctionDefinition::Internal {\n")?;
+                f.write_fmt(format_args!("    locals: {:?}\n", locals))?;
+                f.write_str("    instructions: [\n")?;
+                for i in instructions {
+                    f.write_fmt(format_args!("        {:?}\n", i))?;
+                }
+                f.write_str("}\n")
+            }
+            FunctionDefinition::Import(_) => {
+                f.write_str("FunctionDefinition::Import(_)\n")
+            }
+        }
+    }
+}
+
 pub struct HostEnvironment {
-    functions: HashMap<String, ImportFunction>,
+    pub functions: HashMap<String, ImportFunction>,
 }
 
 pub struct ModuleEnvironment {
     memory: Vec<u8>,
     functions: Vec<Function>,
     start: Option<usize>,
+    symtab: Option<wasm_binary::name_section::SymbolTable>,
+}
+
+impl ::std::fmt::Debug for ModuleEnvironment {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        f.write_str("ModuleEnvironment {\n")?;
+        f.write_str("    memory: {")?;
+
+        /*
+        for (i, byte) in self.memory.iter().enumerate() {
+            if i % 16 == 0 {
+                f.write_str("\n        ")?;
+            } else if i % 8 == 0 {
+                f.write_str(" ")?;
+            }
+            f.write_fmt(format_args!("{:02x} ", byte))?;
+        }
+        */
+        f.write_fmt(format_args!("\n    <skipped {} bytes>", self.memory.len()))?;
+
+        f.write_str("\n    }\n")?;
+        // FIXME: this writes the functions indented one level too few.
+        for (i, fun) in self.functions.iter().enumerate() {
+            f.write_fmt(format_args!("    Function {}: {:?}\n", i, fun))?;
+        }
+        f.write_fmt(format_args!("    start: {:?}\n", self.start))?;
+        f.write_str("}\n")
+    }
 }
 
 // TODO: need to represent and pass in the external environment somehow
@@ -180,9 +236,21 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
     // TODO: global instantiation
     // TODO: build exports map
 
+    let symtab = module.custom_sections
+        .iter()
+        .find(|section| section.name == "name")
+        .and_then(|section| wasm_binary::name_section::SymbolTable::from_bytes(
+                &section.payload)
+            .map_err(|e| {
+                error!("unable to parse symbol table from name section: {:?}", e);
+                e
+            })
+            .ok());
+
     Ok(ModuleEnvironment {
         memory,
         functions,
         start: module.start,
+        symtab,
     })
 }

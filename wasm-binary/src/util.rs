@@ -51,23 +51,23 @@ pub fn read_string<R: io::Read>(mut r: R) -> Result<String, Error> {
 pub fn read_f64<R: io::Read>(mut r: R) -> Result<f64, Error> {
     let mut buf = [0u8; 8];
     r.read_exact(&mut buf).map_err(Error::IO)?;
-    let unsigned = (buf[0] as u64)
-         | ((buf[1] as u64) << 8)
-         | ((buf[2] as u64) << 16)
-         | ((buf[3] as u64) << 24)
-         | ((buf[4] as u64) << 32)
-         | ((buf[5] as u64) << 40)
-         | ((buf[6] as u64) << 48)
-         | ((buf[7] as u64) << 56);
+    let unsigned = u64::from(buf[0])
+         | (u64::from(buf[1]) << 8)
+         | (u64::from(buf[2]) << 16)
+         | (u64::from(buf[3]) << 24)
+         | (u64::from(buf[4]) << 32)
+         | (u64::from(buf[5]) << 40)
+         | (u64::from(buf[6]) << 48)
+         | (u64::from(buf[7]) << 56);
     Ok(f64::from_bits(unsigned))
 }
 
 pub fn read_f32<R: io::Read>(mut r: R) -> Result<f32, Error> {
     let mut buf = [0u8; 4];
     r.read_exact(&mut buf).map_err(Error::IO)?;
-    let unsigned = (buf[0] as u32)
-         | ((buf[1] as u32) << 8)
-         | ((buf[2] as u32) << 16)
-         | ((buf[3] as u32) << 24);
+    let unsigned = u32::from(buf[0])
+         | (u32::from(buf[1]) << 8)
+         | (u32::from(buf[2]) << 16)
+         | (u32::from(buf[3]) << 24);
     Ok(f32::from_bits(unsigned))
 }

@@ -190,22 +190,22 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
 
         let offset_code = segment.offset.instructions()?;
 
-        let offset = match &offset_code[..] {
+        let offset = match offset_code[..] {
             // The spec says this needs to evaluate to an i32, so...
-            &[Instruction::I32Const(offset)] => {
+            [Instruction::I32Const(offset)] => {
                 if offset < 0 {
                     return Err(Error::Instantiation("data segment offset is negative"));
                 }
                 offset as usize
             }
-            &[Instruction::I64Const(_)]
-                | &[Instruction::F32Const(_)]
-                | &[Instruction::F64Const(_)] =>
+            [Instruction::I64Const(_)]
+                | [Instruction::F32Const(_)]
+                | [Instruction::F64Const(_)] =>
             {
                 return Err(Error::Instantiation(
                     "data segment offset initializer expression returns the wrong type"));
             }
-            &[Instruction::GetGlobal(_index)] => {
+            [Instruction::GetGlobal(_index)] => {
                 return Err(Error::Instantiation(
                     "loading data segment offsets from imports isn't supported yet"));
             }

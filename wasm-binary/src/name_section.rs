@@ -135,7 +135,7 @@ impl Read for NameSubsection {
     fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
         let typ = NameType::read(&mut r)?;
         let payload_len = read_varu32(&mut r)?;
-        let mut r = r.take(payload_len as u64);
+        let mut r = r.take(u64::from(payload_len));
         match typ {
             NameType::Module => {
                 let name = read_string(r)?;

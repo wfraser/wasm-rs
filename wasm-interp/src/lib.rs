@@ -36,6 +36,17 @@ pub enum Value {
     F64(f64),
 }
 
+impl Value {
+    pub fn valuetype(&self) -> module::ValueType {
+        match self {
+            Value::I32(_) => module::ValueType::I32,
+            Value::I64(_) => module::ValueType::I64,
+            Value::F32(_) => module::ValueType::F32,
+            Value::F64(_) => module::ValueType::F64,
+        }
+    }
+}
+
 /// Helper function to aid in making the right boxed function type, because rustc's type inference
 /// makes it awkward otherwise.
 pub fn make_import_function<F: 'static + Fn(Vec<Value>) -> Option<Value>>(f: F)
@@ -100,6 +111,7 @@ impl ModuleEnvironment {
     }
 
     pub fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Option<Value>, Error> {
+        debug!("exports: {:?}", self.exports);
         let (kind, idx) = self.exports
             .get(name)
             .cloned()
@@ -110,13 +122,43 @@ impl ModuleEnvironment {
         debug!("running function {:?}, index {}", name, idx);
         let mut stack = Stack::new();
 
-        // TODO: check the declared type of the function before pushing args
+        let sig = self.functions[idx].signature.clone();
+        debug!("signature: {:?}", sig);
+
+        if sig.param_types.len() != args.len() {
+            return Err(Error::InvalidOperation("wrong number of arguments"));
+        }
+        for (typ, arg) in sig.param_types.iter().zip(args) {
+            debug!("arg: {:?} - {:?}", typ, arg);
+            if arg.valuetype() != *typ {
+                return Err(Error::InvalidOperation("wrong argument type(s)"));
+            }
+        }
         stack.extend_from_slice(args);
 
         self.call(idx, &mut stack)?;
 
-        // TODO: check the declared type of the function before returning
-        Ok(stack.pop())
+        //if sig.return_type.is_some() {
+        if let Some(return_type) = sig.return_type {
+            if stack.len() != 1 {
+                // TODO: should this be a hard error?
+                error!("expected 1 value, but stack is: {:?}", stack);
+                Ok(stack.pop())
+            } else {
+                let val = stack.pop().unwrap();
+                if val.valuetype() != return_type {
+                    error!("returned type is wrong type. Expected {:?}, got {:?}",
+                        return_type, val);
+                }
+                Ok(Some(val))
+            }
+        } else {
+            if !stack.is_empty() {
+                // TODO: should this be a hard error? or is it normal?
+                error!("expected empty stack, but stack is: {:?}", stack);
+            }
+            Ok(None)
+        }
     }
 
     fn call(&mut self, idx: usize, stack: &mut Stack) -> Result<(), Error> {

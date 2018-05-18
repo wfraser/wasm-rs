@@ -17,6 +17,7 @@ pub enum Error {
     Instantiation(&'static str),
     MissingImport { module: String, field: String },
     InvalidOperation(&'static str),
+    Runtime(&'static str),
 }
 
 impl From<wasm_binary::Error> for Error {
@@ -111,7 +112,6 @@ impl ModuleEnvironment {
     }
 
     pub fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Option<Value>, Error> {
-        debug!("exports: {:?}", self.exports);
         let (kind, idx) = self.exports
             .get(name)
             .cloned()
@@ -162,7 +162,70 @@ impl ModuleEnvironment {
     }
 
     fn call(&mut self, idx: usize, stack: &mut Stack) -> Result<(), Error> {
-        stack.push(Value::I32(31337));
+        let f = self.functions.get(idx).ok_or(Error::Runtime("function index out of range"))?;
+        debug!("{:?}", f);
+        match &f.definition {
+            FunctionDefinition::Internal { ref locals, ref instructions } => {
+                Self::call_internal(&f.signature, locals, instructions, stack)?;
+            }
+            FunctionDefinition::Import(lambda) => {
+                Self::call_import(&f.signature, lambda, stack)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn call_internal(
+        _signature: &module::FuncType,
+        _locals: &[module::LocalEntry],
+        _instrucions: &[Instruction],
+        _stack: &mut Stack,
+        ) -> Result<(), Error>
+    {
+        error!("no timple mented!");
+        Ok(())
+    }
+
+    fn call_import(signature: &module::FuncType, lambda: &ImportFunction, stack: &mut Stack)
+        -> Result<(), Error>
+    {
+        let mut args = vec![];
+        for typ in &signature.param_types {
+            if let Some(arg) = stack.pop() {
+                if arg.valuetype() != *typ {
+                    return Err(Error::Runtime(
+                            "wrong argument type on the stack for imported function"));
+                }
+                args.push(arg);
+            } else {
+                return Err(Error::Runtime(
+                        "not enough values on the stack for arguments to imported
+                        function"));
+            }
+        }
+
+        let result = lambda(args);
+
+        match (result, signature.return_type) {
+            (Some(val), Some(typ)) if val.valuetype() == typ => {
+                stack.push(val);
+            }
+            (None, None) => (),
+            (Some(_), Some(_)) => {
+                return Err(Error::Runtime(
+                        "imported function returned a value of the wrong type"));
+            }
+            (Some(_), None) => {
+                return Err(Error::Runtime(
+                        "imported function returned a value but was not supposed to"));
+            }
+            (None, Some(_)) => {
+                return Err(Error::Runtime(
+                        "imported function did not return a value but was supposed to"));
+            }
+        }
+
         Ok(())
     }
 }

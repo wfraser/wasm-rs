@@ -95,6 +95,7 @@ pub struct HostEnvironment {
 type Stack = Vec<Value>;
 
 pub struct ModuleEnvironment {
+    types: Vec<module::FuncType>,
     memory: Vec<u8>,
     functions: Vec<Function>,
     start: Option<usize>,
@@ -104,11 +105,12 @@ pub struct ModuleEnvironment {
 
 impl ModuleEnvironment {
     fn function_name(&self, index: usize) -> Option<&str> {
-        self.symtab.as_ref()
-            .and_then(|table| table.functions.as_ref())
-            .and_then(|funcs| funcs.get(&index))
-            .and_then(|func| func.name.as_ref())
-            .map(|s| s.as_str())
+        let name = self.symtab.as_ref()?
+                .functions.as_ref()?
+                .get(&index).as_ref()?
+                .name.as_ref()?
+                .as_str();
+        Some(name)
     }
 
     pub fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Option<Value>, Error> {
@@ -119,7 +121,7 @@ impl ModuleEnvironment {
         if kind != module::ExternalKind::Function {
             return Err(Error::InvalidOperation("export is not a function"));
         }
-        debug!("running function {:?}, index {}", name, idx);
+        info!("public calling function {:?}, index {}", name, idx);
         let mut stack = Stack::new();
 
         let sig = self.functions[idx].signature.clone();
@@ -138,7 +140,6 @@ impl ModuleEnvironment {
 
         self.call(idx, &mut stack)?;
 
-        //if sig.return_type.is_some() {
         if let Some(return_type) = sig.return_type {
             if stack.len() != 1 {
                 // TODO: should this be a hard error?
@@ -161,14 +162,22 @@ impl ModuleEnvironment {
         }
     }
 
-    fn call(&mut self, idx: usize, stack: &mut Stack) -> Result<(), Error> {
+    fn call(&self, idx: usize, stack: &mut Stack) -> Result<(), Error> {
         let f = self.functions.get(idx).ok_or(Error::Runtime("function index out of range"))?;
-        debug!("{:?}", f);
+
+        if let Some(name) = self.function_name(idx) {
+            info!("running function {}", name);
+        } else {
+            info!("running unnamed function {}", idx);
+        }
+
         match &f.definition {
             FunctionDefinition::Internal { ref locals, ref instructions } => {
-                Self::call_internal(&f.signature, locals, instructions, stack)?;
+                info!("internal function, {:?}, locals: {:?}", f.signature, locals);
+                self.call_internal(&f.signature, locals, instructions, stack)?;
             }
             FunctionDefinition::Import(lambda) => {
+                info!("imported function, {:?}", f.signature);
                 Self::call_import(&f.signature, lambda, stack)?;
             }
         }
@@ -177,13 +186,116 @@ impl ModuleEnvironment {
     }
 
     fn call_internal(
+        &self,
         _signature: &module::FuncType,
         _locals: &[module::LocalEntry],
-        _instrucions: &[Instruction],
-        _stack: &mut Stack,
+        instructions: &[Instruction],
+        stack: &mut Stack,
         ) -> Result<(), Error>
     {
-        error!("no timple mented!");
+        // TODO: it would be nice to have the instruction offset available for debugging
+        for inst in instructions {
+            match inst {
+                Instruction::Unreachable => {
+                    error!("entered unreachable code!");
+                    return Err(Error::Runtime("entered unreachable code"));
+                }
+                Instruction::Nop => {
+                    debug!("nop");
+                }
+                Instruction::Block(return_type) => {
+                    debug!("block returning {:?}", return_type);
+                    //TODO
+                    unimplemented!();
+                }
+                Instruction::Loop(return_type) => {
+                    debug!("loop returning {:?}", return_type);
+                    //TODO
+                    unimplemented!();
+                }
+                Instruction::If(return_type) => {
+                    debug!("if block returning {:?}", return_type);
+                    //TODO
+                    unimplemented!();
+                }
+                Instruction::Else => {
+                    debug!("Else");
+                    //TODO
+                    unimplemented!();
+                }
+                Instruction::End => {
+                    debug!("End");
+                    //TODO
+                    unimplemented!();
+                }
+                Instruction::Br(num_entries) => {
+                    debug!("branch {} stack entries", num_entries);
+                    //TODO
+                    unimplemented!();
+                }
+                Instruction::BrIf(num_entries) => {
+                    debug!("conditional branch {} stack entries", num_entries);
+                    //TODO
+                    unimplemented!();
+                }
+                Instruction::BrTable { target_table, default_target } => {
+                    debug!("branch table ({:?}) default = {}", target_table, default_target);
+                    //TODO
+                    unimplemented!();
+                }
+                Instruction::Call(idx) => {
+                    debug!("call {}", idx);
+                    self.call(*idx as usize, stack)?;
+                }
+                Instruction::CallIndirect(type_idx) => {
+                    // pop, interpret as fn index, compare signatures
+                    let signature = self.types.get(*type_idx as usize)
+                        .ok_or(Error::Runtime("type index out of bounds for indirect call"))?;
+                    debug!("call indirect with type signature {:?}", signature);
+                    //TODO
+                    unimplemented!();
+                }
+                Instruction::Drop => {
+                    let dropped = stack.pop();
+                    debug!("drop: {:?}", dropped);
+                    if dropped.is_none() {
+                        return Err(Error::Runtime("stack underflow"));
+                    }
+                }
+                Instruction::Select => {
+                    let a = stack.pop().ok_or(Error::Runtime("stack underflow"))?;
+                    let b = stack.pop().ok_or(Error::Runtime("stack underflow"))?;
+                    let cond = stack.pop().ok_or(Error::Runtime("stack underflow"))?;
+                    debug!("select {:?} {:?} {:?}", a, b, cond);
+                    if a.valuetype() != b.valuetype() {
+                        return Err(Error::Runtime("mismatching operand types for select instruction"));
+                    }
+                    let result = match cond {
+                        Value::I32(0) => b,
+                        Value::I32(_) => a,
+                        _ => {
+                            return Err(Error::Runtime("non-I32 condition argument to select instruction"));
+                        }
+                    };
+                    stack.push(result);
+                }
+
+                // TODO: more instructions
+
+                Instruction::I32Const(value) => {
+                    debug!("i32const {}", value);
+                    stack.push(Value::I32(*value));
+                }
+
+                // TODO: more instructions
+
+                _ => {
+                    error!("unimplemented instruction {:?}", inst);
+                    //TODO
+                    unimplemented!();
+                }
+            }
+        }
         Ok(())
     }
 
@@ -423,6 +535,7 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
             .ok());
 
     Ok(ModuleEnvironment {
+        types: module.types.clone(),
         memory,
         functions,
         start: module.start,

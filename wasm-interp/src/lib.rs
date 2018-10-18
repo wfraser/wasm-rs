@@ -147,6 +147,15 @@ impl ModuleEnvironment {
         Some(name)
     }
 
+    fn zero_value(typ: module::ValueType) -> Value {
+        match typ {
+            module::ValueType::I32 => Value::I32(0),
+            module::ValueType::I64 => Value::I64(0),
+            module::ValueType::F32 => Value::F32(0.),
+            module::ValueType::F64 => Value::F64(0.),
+        }
+    }
+
     pub fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Option<Value>, Error> {
         let (kind, idx) = self.exports
             .get(name)
@@ -206,9 +215,20 @@ impl ModuleEnvironment {
         }
 
         match &f.definition {
-            FunctionDefinition::Internal { ref locals, ref instructions } => {
-                info!("internal function, {:?}, locals: {:?}", f.signature, locals);
-                self.call_internal(&f.signature, locals, instructions, stack)?;
+            FunctionDefinition::Internal { locals: ref local_specs, ref instructions } => {
+                info!("internal function, {:?}, locals: {:?}", f.signature, local_specs);
+
+                // Set up the locals with zero values of the appropriate types and counts
+                let mut locals = vec![];
+                for local in local_specs {
+                    for _ in 0 .. local.count {
+                        locals.push(Self::zero_value(local.typ));
+                    }
+                }
+
+                // TODO: check the stack against the functions param types
+
+                self.call_internal(&f.signature, instructions, stack, &mut locals)?;
             }
             FunctionDefinition::Import(lambda) => {
                 info!("imported function, {:?}", f.signature);
@@ -222,9 +242,9 @@ impl ModuleEnvironment {
     fn call_internal(
         &self,
         _signature: &module::FuncType,
-        _locals: &[module::LocalEntry],
         instructions: &[Instruction],
         stack: &mut Stack,
+        locals: &mut [Value],
         ) -> Result<(), Error>
     {
         // TODO: it would be nice to have the instruction offset available for debugging
@@ -310,6 +330,21 @@ impl ModuleEnvironment {
                         }
                     };
                     stack.push(result);
+                }
+
+                Instruction::GetLocal(idx) => {
+                    let val = locals.get(*idx)
+                        .ok_or(Error::Runtime("attempt to get a local out of bounds"))?
+                        .clone();
+                    debug!("get local {}: {:?}", idx, val);
+                    stack.push(val);
+                }
+                Instruction::SetLocal(idx) => {
+                    let val = stack.pop()?;
+                    debug!("set local {} to {:?}", idx, val);
+                    let local: &mut Value = locals.get_mut(*idx)
+                        .ok_or(Error::Runtime("attempt to set a local out of bounds"))?;
+                    *local = val;
                 }
 
                 // TODO: more instructions

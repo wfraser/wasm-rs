@@ -70,6 +70,6 @@ fn main() {
     println!("\n{:#?}", module_env);
 
     println!("running the thing");
-    let result = module_env.call_function("main", &[], &mut memory).unwrap()
+    let result = module_env.call_function("main", &[], &mut memory).unwrap();
     println!("result = {:?}", result);
 }

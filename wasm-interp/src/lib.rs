@@ -2,7 +2,7 @@
 
 extern crate wasm_binary;
 use wasm_binary::Module;
-use wasm_binary::module;
+use wasm_binary::module::{self, ValueType};
 use wasm_binary::instructions::{self, Instruction};
 
 use std::collections::HashMap;
@@ -38,12 +38,12 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn valuetype(&self) -> module::ValueType {
+    pub fn valuetype(&self) -> ValueType {
         match self {
-            Value::I32(_) => module::ValueType::I32,
-            Value::I64(_) => module::ValueType::I64,
-            Value::F32(_) => module::ValueType::F32,
-            Value::F64(_) => module::ValueType::F64,
+            Value::I32(_) => ValueType::I32,
+            Value::I64(_) => ValueType::I64,
+            Value::F32(_) => ValueType::F32,
+            Value::F64(_) => ValueType::F64,
         }
     }
 }
@@ -131,6 +131,29 @@ impl Stack {
     }
 }
 
+/// Pop from the stack and expect a certain value type.
+macro_rules! popt {
+    ($stack:expr, $t:path) => {
+        match $stack.pop()? {
+            $t(v) => Ok(v),
+            _ => Err(Error::Runtime("type mismatch")),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ControlEntry {
+    label: Label,
+    stack_limit: usize,
+    signature: module::BlockType,
+}
+
+#[derive(Debug)]
+enum Label {
+    Unbound,
+    Bound(usize),
+}
+
 pub struct ModuleEnvironment {
     types: Vec<module::FuncType>,
     functions: Vec<Function>,
@@ -159,12 +182,12 @@ impl ModuleEnvironment {
         Some(name)
     }
 
-    fn zero_value(typ: module::ValueType) -> Value {
+    fn zero_value(typ: ValueType) -> Value {
         match typ {
-            module::ValueType::I32 => Value::I32(0),
-            module::ValueType::I64 => Value::I64(0),
-            module::ValueType::F32 => Value::F32(0.),
-            module::ValueType::F64 => Value::F64(0.),
+            ValueType::I32 => Value::I32(0),
+            ValueType::I64 => Value::I64(0),
+            ValueType::F32 => Value::F32(0.),
+            ValueType::F64 => Value::F64(0.),
         }
     }
 
@@ -256,7 +279,11 @@ impl ModuleEnvironment {
                     }
                 }
 
-                let mut control = vec![];
+                let mut control = vec![ControlEntry {
+                    label: Label::Bound(instructions.len()),
+                    stack_limit: 0,
+                    signature: module::BlockType::from(f.signature.return_type)
+                }];
 
                 self.call_internal(instructions, stack, memory, &mut control, &mut locals)?;
             }
@@ -274,13 +301,17 @@ impl ModuleEnvironment {
         instructions: &[Instruction],
         stack: &mut Stack,
         memory: &mut Vec<u8>,
-        control: &mut Vec<()>, // TODO
+        control: &mut Vec<ControlEntry>,
         locals: &mut [Value],
         ) -> Result<(), Error>
     {
         // TODO: it would be nice to have the instruction offset available for debugging
-        for inst in instructions {
-            trace!("{:?}", inst);
+        let mut ip = 0;
+        loop {
+            let inst = instructions.get(ip)
+                .ok_or(Error::Runtime("instruction pointer out of bounds"))?;
+
+            trace!("{}: {:?}", ip, inst);
             match inst {
                 Instruction::Unreachable => {
                     error!("entered unreachable code!");
@@ -289,12 +320,19 @@ impl ModuleEnvironment {
                 Instruction::Nop => (),
                 Instruction::Block(return_type) => {
                     debug!("block returning {:?}", return_type);
-                    control.push(()); // TODO
+                    control.push(ControlEntry {
+                        label: Label::Unbound,
+                        stack_limit: stack.len(),
+                        signature: *return_type,
+                    });
                 }
                 Instruction::Loop(return_type) => {
                     debug!("loop returning {:?}", return_type);
-                    //TODO
-                    unimplemented!();
+                    control.push(ControlEntry {
+                        label: Label::Bound(ip),
+                        stack_limit: stack.len(),
+                        signature: *return_type,
+                    });
                 }
                 Instruction::If(return_type) => {
                     debug!("if block returning {:?}", return_type);
@@ -306,20 +344,39 @@ impl ModuleEnvironment {
                     unimplemented!();
                 }
                 Instruction::End => {
-                    if control.pop().is_none() {
+                    let entry = control.pop()
+                        .ok_or(Error::Runtime("control stack underflow"))?;
+                    debug!("popped control entry {:?}", entry);
+
+                    // TODO: bind the label to here and store this in the original branch
+                    // instruction somehow.
+
+                    if control.is_empty() {
                         info!("End of function");
+                        match entry.label {
+                            Label::Bound(n) => {
+                                if n != ip + 1 {
+                                    error!("ip = {}; entry = {:?}", ip, entry);
+                                    return Err(Error::Runtime("function control entry doesn't match the end point"));
+                                }
+                            }
+                            Label::Unbound => {
+                                return Err(Error::Runtime("topmost control entry has unbound label"));
+                            }
+                        }
                         return Ok(());
                     }
                 }
                 Instruction::Br(num_entries) => {
                     debug!("Branch {} stack entries", num_entries);
-                    //TODO
-                    unimplemented!();
+                    ip = Self::branch(stack, control, instructions, ip, *num_entries)?;
                 }
                 Instruction::BrIf(num_entries) => {
-                    debug!("conditional branch {} stack entries", num_entries);
-                    //TODO
-                    unimplemented!();
+                    let cond = popt!(stack, Value::I32)? == 1;
+                    debug!("conditional branch ({:?}) {} stack entries", cond, num_entries);
+                    if cond {
+                        ip = Self::branch(stack, control, instructions, ip, *num_entries)?;
+                    }
                 }
                 Instruction::BrTable { target_table, default_target } => {
                     debug!("BranchTable: ({:?}) default = {}", target_table, default_target);
@@ -385,10 +442,10 @@ impl ModuleEnvironment {
 
                 // TODO: more instructions
 
-                Instruction::I32Load(what) => {
+                Instruction::I32Load(arg) => {
                     let mut value = 0u32;
                     // TODO: what about the alignment?
-                    let offset = what.offset as usize;
+                    let offset = arg.offset as usize;
                     for i in 0 .. 4 {
                         value |= (memory[offset + i] as u32) << (8 * i);
                     }
@@ -398,11 +455,46 @@ impl ModuleEnvironment {
 
                 // ...
 
+                Instruction::I32Store(arg) => {
+                    let value = popt!(stack, Value::I32)?;
+                    let offset = arg.offset as usize;
+                    debug!("storing {} to {:#x}", value, offset);
+                    for i in 0 .. 4 {
+                        memory[offset + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
+                    }
+                }
+
+                // ...
+
                 Instruction::I32Const(value) => {
                     stack.push(Value::I32(*value));
                 }
 
-                // TODO: more instructions
+                // ...
+
+                Instruction::I32Eqz => {
+                    let x = popt!(stack, Value::I32)?;
+                    debug!("{} == 0 = {:?}", x, x == 0);
+                    stack.push(Value::I32(if x == 0 { 1 } else { 0 }));
+                }
+
+                Instruction::I32Eq => {
+                    let a = popt!(stack, Value::I32)?;
+                    let b = popt!(stack, Value::I32)?;
+                    debug!("{} == {} = {:?}", a, b, a == b);
+                    stack.push(Value::I32(if a == b { 1 } else { 0 }));
+                }
+
+                // ...
+
+                Instruction::I32LtS => {
+                    let a: i32 = popt!(stack, Value::I32)?;
+                    let b = popt!(stack, Value::I32)?;
+                    debug!("{} < {} = {:?}", a, b, a < b);
+                    stack.push(Value::I32(if a < b { 1 } else { 0 }));
+                }
+
+                // ...
 
                 Instruction::I32Add => {
                     match (stack.pop()?, stack.pop()?) {
@@ -415,6 +507,30 @@ impl ModuleEnvironment {
                         }
                     }
                 }
+                Instruction::I32Sub => {
+                    let a = popt!(stack, Value::I32)?;
+                    let b = popt!(stack, Value::I32)?;
+                    let c = a - b;
+                    debug!("{} - {} = {}", a, b, c);
+                    stack.push(Value::I32(c));
+                }
+
+                // ...
+
+                Instruction::I32And => {
+                    let a = popt!(stack, Value::I32)?;
+                    let b = popt!(stack, Value::I32)?;
+                    let c = a & b;
+                    debug!("{} & {} = {}", a, b, c);
+                    stack.push(Value::I32(c));
+                }
+                Instruction::I32Xor => {
+                    let a = popt!(stack, Value::I32)?;
+                    let b = popt!(stack, Value::I32)?;
+                    let c = a ^ b;
+                    debug!("{} ^ {} = {}", a, b, c);
+                    stack.push(Value::I32(c));
+                }
 
                 _ => {
                     error!("unimplemented instruction {:?}", inst);
@@ -422,9 +538,9 @@ impl ModuleEnvironment {
                     unimplemented!();
                 }
             }
-        }
 
-        Err(Error::Runtime("function did not end with an End instruction"))
+            ip += 1;
+        }
     }
 
     fn call_import(
@@ -471,6 +587,72 @@ impl ModuleEnvironment {
         }
 
         Ok(())
+    }
+
+    fn branch(
+        stack: &mut Stack,
+        control: &mut Vec<ControlEntry>,
+        instructions: &[Instruction],
+        ip: usize,
+        num_entries: u32,
+        ) -> Result<usize, Error>
+    {
+        for _ in 0 .. num_entries {
+            if control.pop().is_none() {
+                return Err(Error::Runtime("control stack underflow"));
+            }
+        }
+
+        let entry = control.pop()
+            .ok_or(Error::Runtime("control stack underflow"))?;
+        debug!("control stack entry: {:?}", entry);
+
+        while stack.len() > entry.stack_limit {
+            let value = stack.pop()?;
+            debug!("popping {:?}", value);
+        }
+
+        match entry.label {
+            Label::Bound(target) => {
+                debug!("Setting execution point from {} to {}", ip, target);
+                Ok(target)
+            }
+            Label::Unbound => {
+                debug!("Seeking for branch destination");
+
+                let mut depth = 0;
+                let mut offset = None;
+                for (i, inst) in instructions[ip + 1 ..].iter().enumerate() {
+                    debug!("  > {:?}", inst);
+                    match inst {
+                        Instruction::Block(_) | Instruction::Loop(_) => {
+                            debug!("depth+");
+                            depth += 1;
+                        }
+                        Instruction::End => {
+                            if depth == 0 {
+                                offset = Some(i);
+                                break;
+                            } else {
+                                debug!("depth-");
+                                depth -= 1;
+                            }
+                        }
+                        _ => ()
+                    }
+                }
+
+                if let Some(offset) = offset {
+                    // TODO: cache the target with the instruction somehow.
+
+                    let target = ip + offset + 1;
+                    debug!("Setting execution point from {} to {}", ip, target);
+                    Ok(target)
+                } else {
+                    Err(Error::Runtime("scanning for branch point failed"))
+                }
+            }
+        }
     }
 }
 

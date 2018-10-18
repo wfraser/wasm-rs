@@ -340,7 +340,7 @@ impl Read for ValueType {
 }
 
 /// Types that a block may return.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum BlockType {
     I32,
     I64,
@@ -359,6 +359,18 @@ impl Read for BlockType {
             Type::Void => BlockType::Void,
             _ => { return Err(Error::Invalid("invalid block type")); }
         })
+    }
+}
+
+impl From<Option<ValueType>> for BlockType {
+    fn from(t: Option<ValueType>) -> BlockType {
+        match t {
+            Some(ValueType::I32) => BlockType::I32,
+            Some(ValueType::I64) => BlockType::I64,
+            Some(ValueType::F32) => BlockType::F32,
+            Some(ValueType::F64) => BlockType::F64,
+            None => BlockType::Void,
+        }
     }
 }
 

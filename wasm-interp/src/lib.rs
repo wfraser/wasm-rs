@@ -92,7 +92,41 @@ pub struct HostEnvironment {
     pub functions: HashMap<String, ImportFunction>,
 }
 
-type Stack = Vec<Value>;
+#[derive(Debug)]
+struct Stack {
+    values: Vec<Value>,
+}
+
+impl Stack {
+    pub fn new() -> Stack {
+        Stack {
+            values: vec![],
+        }
+    }
+
+    pub fn push(&mut self, v: Value) {
+        self.values.push(v);
+    }
+
+    pub fn pop(&mut self) -> Result<Value, Error> {
+        match self.values.pop() {
+            Some(value) => Ok(value),
+            None => Err(Error::Runtime("stack underflow")),
+        }
+    }
+
+    pub fn extend_from_slice(&mut self, slice: &[Value]) {
+        self.values.extend_from_slice(slice);
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
 
 pub struct ModuleEnvironment {
     types: Vec<module::FuncType>,
@@ -144,7 +178,7 @@ impl ModuleEnvironment {
             if stack.len() != 1 {
                 // TODO: should this be a hard error?
                 error!("expected 1 value, but stack is: {:?}", stack);
-                Ok(stack.pop())
+                stack.pop().map(Some)
             } else {
                 let val = stack.pop().unwrap();
                 if val.valuetype() != return_type {
@@ -258,14 +292,12 @@ impl ModuleEnvironment {
                 Instruction::Drop => {
                     let dropped = stack.pop();
                     debug!("drop: {:?}", dropped);
-                    if dropped.is_none() {
-                        return Err(Error::Runtime("stack underflow"));
-                    }
+                    dropped?;
                 }
                 Instruction::Select => {
-                    let a = stack.pop().ok_or(Error::Runtime("stack underflow"))?;
-                    let b = stack.pop().ok_or(Error::Runtime("stack underflow"))?;
-                    let cond = stack.pop().ok_or(Error::Runtime("stack underflow"))?;
+                    let a = stack.pop()?;
+                    let b = stack.pop()?;
+                    let cond = stack.pop()?;
                     debug!("select {:?} {:?} {:?}", a, b, cond);
                     if a.valuetype() != b.valuetype() {
                         return Err(Error::Runtime("mismatching operand types for select instruction"));
@@ -304,7 +336,7 @@ impl ModuleEnvironment {
     {
         let mut args = vec![];
         for typ in &signature.param_types {
-            if let Some(arg) = stack.pop() {
+            if let Ok(arg) = stack.pop() {
                 if arg.valuetype() != *typ {
                     return Err(Error::Runtime(
                             "wrong argument type on the stack for imported function"));

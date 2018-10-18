@@ -248,7 +248,7 @@ impl ModuleEnvironment {
                     }
                 }
 
-                self.call_internal(&f.signature, instructions, stack, &mut locals)?;
+                self.call_internal(instructions, stack, &mut locals)?;
             }
             FunctionDefinition::Import(lambda) => {
                 info!("imported function, {:?}", f.signature);
@@ -261,7 +261,6 @@ impl ModuleEnvironment {
 
     fn call_internal(
         &self,
-        _signature: &module::FuncType,
         instructions: &[Instruction],
         stack: &mut Stack,
         locals: &mut [Value],

@@ -50,8 +50,8 @@ impl Value {
 
 /// Helper function to aid in making the right boxed function type, because rustc's type inference
 /// makes it awkward otherwise.
-pub fn make_import_function<F: 'static + Fn(Vec<Value>) -> Option<Value>>(f: F)
-    -> ImportFunction
+pub fn make_import_function<F>(f: F) -> ImportFunction
+    where F: Fn(Vec<Value>) -> Option<Value> + 'static,
 {
     Box::new(f)
 }
@@ -115,10 +115,6 @@ impl Stack {
         }
     }
 
-    pub fn extend_from_slice(&mut self, slice: &[Value]) {
-        self.values.extend_from_slice(slice);
-    }
-
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -140,10 +136,20 @@ pub struct ModuleEnvironment {
 impl ModuleEnvironment {
     fn function_name(&self, index: usize) -> Option<&str> {
         let name = self.symtab.as_ref()?
-                .functions.as_ref()?
-                .get(&index).as_ref()?
-                .name.as_ref()?
-                .as_str();
+            .functions.as_ref()?
+            .get(&index).as_ref()?
+            .name.as_ref()?
+            .as_str();
+        Some(name)
+    }
+
+    fn local_name(&self, fn_index: usize, local_index: usize) -> Option<&str> {
+        let name = self.symtab.as_ref()?
+            .functions.as_ref()?
+            .get(&fn_index).as_ref()?
+            .locals.as_ref()?
+            .get(&local_index).as_ref()?
+            .as_str();
         Some(name)
     }
 
@@ -179,7 +185,9 @@ impl ModuleEnvironment {
                 return Err(Error::InvalidOperation("wrong argument type(s)"));
             }
         }
-        stack.extend_from_slice(args);
+        for arg in args.into_iter().rev() {
+            stack.push(*arg);
+        }
 
         self.call(idx, &mut stack)?;
 
@@ -220,13 +228,25 @@ impl ModuleEnvironment {
 
                 // Set up the locals with zero values of the appropriate types and counts
                 let mut locals = vec![];
+                for param_type in &f.signature.param_types {
+                    let val = stack.pop()?;
+                    debug!("adding param to locals: {:?}", val);
+                    if val.valuetype() != *param_type {
+                        return Err(Error::Runtime("wrong value type passed as parameter"));
+                    }
+
+                    debug!("local var name {:?}",
+                        self.local_name(idx, stack.len()).unwrap_or("<unnamed>"));
+
+                    locals.push(val);
+                }
+
                 for local in local_specs {
                     for _ in 0 .. local.count {
+                        debug!("adding empty {:?} value to locals", local.typ);
                         locals.push(Self::zero_value(local.typ));
                     }
                 }
-
-                // TODO: check the stack against the functions param types
 
                 self.call_internal(&f.signature, instructions, stack, &mut locals)?;
             }
@@ -249,14 +269,13 @@ impl ModuleEnvironment {
     {
         // TODO: it would be nice to have the instruction offset available for debugging
         for inst in instructions {
+            trace!("{:?}", inst);
             match inst {
                 Instruction::Unreachable => {
                     error!("entered unreachable code!");
                     return Err(Error::Runtime("entered unreachable code"));
                 }
-                Instruction::Nop => {
-                    debug!("nop");
-                }
+                Instruction::Nop => (),
                 Instruction::Block(return_type) => {
                     debug!("block returning {:?}", return_type);
                     //TODO
@@ -273,17 +292,15 @@ impl ModuleEnvironment {
                     unimplemented!();
                 }
                 Instruction::Else => {
-                    debug!("Else");
                     //TODO
                     unimplemented!();
                 }
                 Instruction::End => {
-                    debug!("End");
                     //TODO
                     unimplemented!();
                 }
                 Instruction::Br(num_entries) => {
-                    debug!("branch {} stack entries", num_entries);
+                    debug!("Branch {} stack entries", num_entries);
                     //TODO
                     unimplemented!();
                 }
@@ -293,32 +310,32 @@ impl ModuleEnvironment {
                     unimplemented!();
                 }
                 Instruction::BrTable { target_table, default_target } => {
-                    debug!("branch table ({:?}) default = {}", target_table, default_target);
+                    debug!("BranchTable: ({:?}) default = {}", target_table, default_target);
                     //TODO
                     unimplemented!();
                 }
                 Instruction::Call(idx) => {
-                    debug!("call {}", idx);
+                    debug!("Call {}", idx);
                     self.call(*idx as usize, stack)?;
                 }
                 Instruction::CallIndirect(type_idx) => {
                     // pop, interpret as fn index, compare signatures
                     let signature = self.types.get(*type_idx as usize)
                         .ok_or(Error::Runtime("type index out of bounds for indirect call"))?;
-                    debug!("call indirect with type signature {:?}", signature);
+                    debug!("CallIndirect with type signature {:?}", signature);
                     //TODO
                     unimplemented!();
                 }
                 Instruction::Drop => {
                     let dropped = stack.pop();
-                    debug!("drop: {:?}", dropped);
+                    debug!("Drop: {:?}", dropped);
                     dropped?;
                 }
                 Instruction::Select => {
                     let a = stack.pop()?;
                     let b = stack.pop()?;
                     let cond = stack.pop()?;
-                    debug!("select {:?} {:?} {:?}", a, b, cond);
+                    debug!("Select: {:?} {:?} {:?}", a, b, cond);
                     if a.valuetype() != b.valuetype() {
                         return Err(Error::Runtime("mismatching operand types for select instruction"));
                     }
@@ -350,11 +367,22 @@ impl ModuleEnvironment {
                 // TODO: more instructions
 
                 Instruction::I32Const(value) => {
-                    debug!("i32const {}", value);
                     stack.push(Value::I32(*value));
                 }
 
                 // TODO: more instructions
+
+                Instruction::I32Add => {
+                    match (stack.pop()?, stack.pop()?) {
+                        (Value::I32(a), Value::I32(b)) => {
+                            debug!("I32Add: {} + {} -> {}", a, b, a + b);
+                            stack.push(Value::I32(a + b));
+                        }
+                        _ => {
+                            return Err(Error::Runtime("argument wrong type for I32Add"));
+                        }
+                    }
+                }
 
                 _ => {
                     error!("unimplemented instruction {:?}", inst);

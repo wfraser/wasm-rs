@@ -115,6 +115,13 @@ impl Stack {
         }
     }
 
+    pub fn last(&self) -> Result<Value, Error> {
+        match self.values.last() {
+            Some(value) => Ok(value.clone()),
+            None => Err(Error::Runtime("stack underflow")),
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -126,7 +133,6 @@ impl Stack {
 
 pub struct ModuleEnvironment {
     types: Vec<module::FuncType>,
-    memory: Vec<u8>,
     functions: Vec<Function>,
     start: Option<usize>,
     exports: HashMap<String, (module::ExternalKind, usize)>,
@@ -162,7 +168,9 @@ impl ModuleEnvironment {
         }
     }
 
-    pub fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Option<Value>, Error> {
+    pub fn call_function(&mut self, name: &str, args: &[Value], memory: &mut Vec<u8>)
+        -> Result<Option<Value>, Error>
+    {
         let (kind, idx) = self.exports
             .get(name)
             .cloned()
@@ -189,7 +197,7 @@ impl ModuleEnvironment {
             stack.push(*arg);
         }
 
-        self.call(idx, &mut stack)?;
+        self.call(idx, &mut stack, memory)?;
 
         if let Some(return_type) = sig.return_type {
             if stack.len() != 1 {
@@ -213,7 +221,7 @@ impl ModuleEnvironment {
         }
     }
 
-    fn call(&self, idx: usize, stack: &mut Stack) -> Result<(), Error> {
+    fn call(&self, idx: usize, stack: &mut Stack, memory: &mut Vec<u8>) -> Result<(), Error> {
         let f = self.functions.get(idx).ok_or(Error::Runtime("function index out of range"))?;
 
         if let Some(name) = self.function_name(idx) {
@@ -248,11 +256,13 @@ impl ModuleEnvironment {
                     }
                 }
 
-                self.call_internal(instructions, stack, &mut locals)?;
+                let mut control = vec![];
+
+                self.call_internal(instructions, stack, memory, &mut control, &mut locals)?;
             }
             FunctionDefinition::Import(lambda) => {
                 info!("imported function, {:?}", f.signature);
-                Self::call_import(&f.signature, lambda, stack)?;
+                Self::call_import(&f.signature, lambda, stack, memory)?;
             }
         }
 
@@ -263,6 +273,8 @@ impl ModuleEnvironment {
         &self,
         instructions: &[Instruction],
         stack: &mut Stack,
+        memory: &mut Vec<u8>,
+        control: &mut Vec<()>, // TODO
         locals: &mut [Value],
         ) -> Result<(), Error>
     {
@@ -277,8 +289,7 @@ impl ModuleEnvironment {
                 Instruction::Nop => (),
                 Instruction::Block(return_type) => {
                     debug!("block returning {:?}", return_type);
-                    //TODO
-                    unimplemented!();
+                    control.push(()); // TODO
                 }
                 Instruction::Loop(return_type) => {
                     debug!("loop returning {:?}", return_type);
@@ -295,8 +306,10 @@ impl ModuleEnvironment {
                     unimplemented!();
                 }
                 Instruction::End => {
-                    //TODO
-                    unimplemented!();
+                    if control.pop().is_none() {
+                        info!("End of function");
+                        return Ok(());
+                    }
                 }
                 Instruction::Br(num_entries) => {
                     debug!("Branch {} stack entries", num_entries);
@@ -315,7 +328,7 @@ impl ModuleEnvironment {
                 }
                 Instruction::Call(idx) => {
                     debug!("Call {}", idx);
-                    self.call(*idx as usize, stack)?;
+                    self.call(*idx as usize, stack, memory)?;
                 }
                 Instruction::CallIndirect(type_idx) => {
                     // pop, interpret as fn index, compare signatures
@@ -362,8 +375,28 @@ impl ModuleEnvironment {
                         .ok_or(Error::Runtime("attempt to set a local out of bounds"))?;
                     *local = val;
                 }
+                Instruction::TeeLocal(idx) => {
+                    let val = stack.last()?;
+                    debug!("set local {} to {:?}", idx, val);
+                    let local: &mut Value = locals.get_mut(*idx)
+                        .ok_or(Error::Runtime("attempt to set a local out of bounds"))?;
+                    *local = val;
+                }
 
                 // TODO: more instructions
+
+                Instruction::I32Load(what) => {
+                    let mut value = 0u32;
+                    // TODO: what about the alignment?
+                    let offset = what.offset as usize;
+                    for i in 0 .. 4 {
+                        value |= (memory[offset + i] as u32) << (8 * i);
+                    }
+                    debug!("loaded {} from {:#x}", value as i32, offset);
+                    stack.push(Value::I32(value as i32));
+                }
+
+                // ...
 
                 Instruction::I32Const(value) => {
                     stack.push(Value::I32(*value));
@@ -390,11 +423,16 @@ impl ModuleEnvironment {
                 }
             }
         }
-        Ok(())
+
+        Err(Error::Runtime("function did not end with an End instruction"))
     }
 
-    fn call_import(signature: &module::FuncType, lambda: &ImportFunction, stack: &mut Stack)
-        -> Result<(), Error>
+    fn call_import(
+        signature: &module::FuncType,
+        lambda: &ImportFunction,
+        stack: &mut Stack,
+        memory: &mut Vec<u8>,
+        ) -> Result<(), Error>
     {
         let mut args = vec![];
         for typ in &signature.param_types {
@@ -440,20 +478,6 @@ impl ::std::fmt::Debug for ModuleEnvironment {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         f.write_str("ModuleEnvironment {\n")?;
 
-        f.write_str("    memory: {")?;
-        /*
-        for (i, byte) in self.memory.iter().enumerate() {
-            if i % 16 == 0 {
-                f.write_str("\n        ")?;
-            } else if i % 8 == 0 {
-                f.write_str(" ")?;
-            }
-            f.write_fmt(format_args!("{:02x} ", byte))?;
-        }
-        */
-        f.write_fmt(format_args!("\n    <skipped {} bytes>", self.memory.len()))?;
-        f.write_str("\n    }\n")?;
-
         // Rather than delegating to FunctionDefinition's Debug impl here, iterate over and print
         // the code ourselves. This lets us try to use symbol table info to include names of things.
         for (i, fun) in self.functions.iter().enumerate() {
@@ -494,7 +518,7 @@ impl ::std::fmt::Debug for ModuleEnvironment {
 
 // TODO: need to represent and pass in the external environment somehow
 pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
-    -> Result<ModuleEnvironment, Error>
+    -> Result<(ModuleEnvironment, Vec<u8>), Error>
 {
     let module = Module::read(r).map_err(|(e, offset)| match e {
         wasm_binary::Error::IO(e) => Error::IO(e),
@@ -628,12 +652,13 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
             })
             .ok());
 
-    Ok(ModuleEnvironment {
-        types: module.types.clone(),
-        memory,
-        functions,
-        start: module.start,
-        exports,
-        symtab,
-    })
+    Ok((
+            ModuleEnvironment {
+                types: module.types.clone(),
+                functions,
+                start: module.start,
+                exports,
+                symtab,
+            },
+            memory))
 }

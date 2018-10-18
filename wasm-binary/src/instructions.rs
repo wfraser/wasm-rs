@@ -651,7 +651,7 @@ pub fn read_instructions(bytes: &[u8]) -> Result<Vec<Instruction>, Error> {
 
 #[derive(Debug, PartialEq)]
 pub struct MemoryImmediate {
-    pub flags: u32,
+    pub alignment: u32,
     pub offset: u32,
 }
 
@@ -659,8 +659,9 @@ impl module::Read for MemoryImmediate {
     fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
         let flags = read_varu32(&mut r)?;
         let offset = read_varu32(&mut r)?;
+        let alignment = 1 << flags;
         Ok(MemoryImmediate {
-            flags,
+            alignment,
             offset,
         })
     }

@@ -288,13 +288,33 @@ impl ModuleEnvironment {
                     *slot = val;
                 }
 
+                // Fresh control stack with entry for the function itself as a whole.
                 let mut control = vec![ControlEntry {
                     label: Label::Bound(instructions.len()),
                     stack_limit: 0,
                     signature: module::BlockType::from(f.signature.return_type)
                 }];
 
-                self.call_internal(instructions, stack, memory, &mut control, &mut locals)?;
+                // Callee gets its own fresh value stack.
+                let mut callee_stack = Stack::new();
+
+                self.call_internal(
+                    instructions, &mut callee_stack, memory, &mut control, &mut locals)?;
+
+                if let Some(typ) = f.signature.return_type {
+                    // Last value on the stack is the return value.
+                    while callee_stack.len() > 1 {
+                        callee_stack.pop().unwrap();
+                    }
+                    let value = callee_stack.pop()?;
+                    debug!("callee returned {:?}", value);
+
+                    if value.valuetype() != typ {
+                        return Err(Error::Runtime("wrong value type returned from function"));
+                    }
+
+                    stack.push(value);
+                }
             }
             FunctionDefinition::Import(lambda) => {
                 info!("imported function, {:?}", f.signature);
@@ -378,7 +398,7 @@ impl ModuleEnvironment {
                     ip = Self::branch(stack, control, instructions, ip, *num_entries)?;
                 }
                 Instruction::BrIf(num_entries) => {
-                    let cond = popt!(stack, Value::I32)? == 1;
+                    let cond = popt!(stack, Value::I32)? != 0;
                     debug!("conditional branch ({:?}) {} stack entries", cond, num_entries);
                     if cond {
                         ip = Self::branch(stack, control, instructions, ip, *num_entries)?;
@@ -400,6 +420,10 @@ impl ModuleEnvironment {
                     debug!("CallIndirect with type signature {:?}", signature);
                     //TODO
                     unimplemented!();
+                }
+                Instruction::Return => {
+                    info!("Returning from function");
+                    return Ok(());
                 }
                 Instruction::Drop => {
                     let dropped = stack.pop();
@@ -459,7 +483,19 @@ impl ModuleEnvironment {
                     for i in 0 .. 4 {
                         value |= (memory[addr + i] as u32) << (8 * i);
                     }
-                    debug!("loaded {} from ({:#x}+{:#x}={:#x})", value as i32, base, offset, addr);
+                    debug!("loaded {}i32 from ({:#x}+{:#x}={:#x})", value as i32, base, offset, addr);
+                    stack.push(Value::I32(value as i32));
+                }
+
+                // ...
+
+                Instruction::I32Load8U(arg) => {
+                    let offset = arg.offset as usize;
+                    let base = popt!(stack, Value::I32)? as usize;
+                    let addr = base + offset;
+
+                    let value = memory[addr] as u32;
+                    debug!("loaded {}u8 from ({:#x}+{:#x}={:#x})", value, base, offset, addr);
                     stack.push(Value::I32(value as i32));
                 }
 
@@ -611,7 +647,7 @@ impl ModuleEnvironment {
             }
         }
 
-        let entry = control.pop()
+        let entry = control.last()
             .ok_or(Error::Runtime("control stack underflow"))?;
         debug!("control stack entry: {:?}", entry);
 
@@ -653,7 +689,7 @@ impl ModuleEnvironment {
                 if let Some(offset) = offset {
                     // TODO: cache the target with the instruction somehow.
 
-                    let target = ip + offset + 1;
+                    let target = ip + offset;
                     debug!("Setting execution point from {} to {}", ip, target);
                     Ok(target)
                 } else {

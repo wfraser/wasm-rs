@@ -48,6 +48,14 @@ impl Value {
     }
 }
 
+fn boolean(b: bool) -> Value {
+    if b {
+        Value::I32(1)
+    } else {
+        Value::I32(0)
+    }
+}
+
 /// Helper function to aid in making the right boxed function type, because rustc's type inference
 /// makes it awkward otherwise.
 pub fn make_import_function<F>(f: F) -> ImportFunction
@@ -426,15 +434,14 @@ impl ModuleEnvironment {
                     return Ok(());
                 }
                 Instruction::Drop => {
-                    let dropped = stack.pop();
+                    let dropped = stack.pop()?;
                     debug!("Drop: {:?}", dropped);
-                    dropped?;
                 }
                 Instruction::Select => {
-                    let a = stack.pop()?;
-                    let b = stack.pop()?;
                     let cond = stack.pop()?;
-                    debug!("Select: {:?} {:?} {:?}", a, b, cond);
+                    let b = stack.pop()?;
+                    let a = stack.pop()?;
+                    debug!("Select: {:?} ? {:?} : {:?}", cond, a, b);
                     if a.valuetype() != b.valuetype() {
                         return Err(Error::Runtime("mismatching operand types for select instruction"));
                     }
@@ -489,11 +496,18 @@ impl ModuleEnvironment {
 
                 // ...
 
+                Instruction::I32Load8S(arg) => {
+                    let offset = arg.offset as usize;
+                    let base = popt!(stack, Value::I32)? as usize;
+                    let addr = base + offset;
+                    let value = memory[addr] as i8 as i32;
+                    debug!("loaded {}u8 from ({:#x}+{:#x}={:#x})", value, base, offset, addr);
+                    stack.push(Value::I32(value));
+                }
                 Instruction::I32Load8U(arg) => {
                     let offset = arg.offset as usize;
                     let base = popt!(stack, Value::I32)? as usize;
                     let addr = base + offset;
-
                     let value = memory[addr] as u32;
                     debug!("loaded {}u8 from ({:#x}+{:#x}={:#x})", value, base, offset, addr);
                     stack.push(Value::I32(value as i32));
@@ -511,11 +525,35 @@ impl ModuleEnvironment {
                         memory[addr + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
                     }
                 }
+                Instruction::I64Store(arg) => {
+                    let value = popt!(stack, Value::I64)?;
+                    let base = popt!(stack, Value::I32)? as usize;
+                    let offset = arg.offset as usize;
+                    let addr = base + offset;
+                    debug!("storing {} to ({:#x}+{:#x}={:#x})", value, base, offset, addr);
+                    for i in 0 .. 8 {
+                        memory[addr + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
+                    }
+                }
+
+                // ...
+
+                Instruction::I32Store8(arg) => {
+                    let value = popt!(stack, Value::I32)? as u8;
+                    let base = popt!(stack, Value::I32)? as usize;
+                    let offset = arg.offset as usize;
+                    let addr = base + offset;
+                    debug!("storing {} to ({:#x}+{:#x}={:#x})", value, base, offset, addr);
+                    memory[addr] = value;
+                }
 
                 // ...
 
                 Instruction::I32Const(value) => {
                     stack.push(Value::I32(*value));
+                }
+                Instruction::I64Const(value) => {
+                    stack.push(Value::I64(*value));
                 }
 
                 // ...
@@ -523,14 +561,21 @@ impl ModuleEnvironment {
                 Instruction::I32Eqz => {
                     let x = popt!(stack, Value::I32)?;
                     debug!("{} == 0 = {:?}", x, x == 0);
-                    stack.push(Value::I32(if x == 0 { 1 } else { 0 }));
+                    stack.push(boolean(x == 0));
                 }
-
                 Instruction::I32Eq => {
                     let b = popt!(stack, Value::I32)?;
                     let a = popt!(stack, Value::I32)?;
-                    debug!("{} == {} = {:?}", a, b, a == b);
-                    stack.push(Value::I32(if a == b { 1 } else { 0 }));
+                    let c = a == b;
+                    debug!("{} == {} = {:?}", a, b, c);
+                    stack.push(boolean(c));
+                }
+                Instruction::I32Ne => {
+                    let b = popt!(stack, Value::I32)?;
+                    let a = popt!(stack, Value::I32)?;
+                    let c = a != b;
+                    debug!("{} != {} = {:?}", a, b, c);
+                    stack.push(boolean(c));
                 }
 
                 // ...
@@ -538,8 +583,16 @@ impl ModuleEnvironment {
                 Instruction::I32LtS => {
                     let b = popt!(stack, Value::I32)?;
                     let a = popt!(stack, Value::I32)?;
+                    let c = a < b;
                     debug!("{} < {} = {:?}", a, b, a < b);
-                    stack.push(Value::I32(if a < b { 1 } else { 0 }));
+                    stack.push(boolean(c));
+                }
+                Instruction::I32LtU => {
+                    let b = popt!(stack, Value::I32)? as u32;
+                    let a = popt!(stack, Value::I32)? as u32;
+                    let c = a < b;
+                    debug!("{} < {} = {:?}", a, b, c);
+                    stack.push(boolean(c));
                 }
 
                 // ...
@@ -558,6 +611,13 @@ impl ModuleEnvironment {
                     debug!("{} - {} = {}", a, b, c);
                     stack.push(Value::I32(c));
                 }
+                Instruction::I32Mul => {
+                    let b = popt!(stack, Value::I32)?;
+                    let a = popt!(stack, Value::I32)?;
+                    let c = a * b;
+                    debug!("{} * {} = {}", a, b, c);
+                    stack.push(Value::I32(c));
+                }
 
                 // ...
 
@@ -568,6 +628,13 @@ impl ModuleEnvironment {
                     debug!("{} & {} = {}", a, b, c);
                     stack.push(Value::I32(c));
                 }
+                Instruction::I32Or => {
+                    let b = popt!(stack, Value::I32)?;
+                    let a = popt!(stack, Value::I32)?;
+                    let c = a | b;
+                    debug!("{} | {} = {}", a, b, c);
+                    stack.push(Value::I32(c));
+                }
                 Instruction::I32Xor => {
                     let b = popt!(stack, Value::I32)?;
                     let a = popt!(stack, Value::I32)?;
@@ -575,6 +642,8 @@ impl ModuleEnvironment {
                     debug!("{} ^ {} = {}", a, b, c);
                     stack.push(Value::I32(c));
                 }
+
+                // ...
 
                 _ => {
                     error!("unimplemented instruction {:?}", inst);
@@ -664,7 +733,7 @@ impl ModuleEnvironment {
             Label::Unbound => {
                 debug!("Seeking for branch destination");
 
-                let mut depth = 0;
+                let mut depth = num_entries;
                 let mut offset = None;
                 for (i, inst) in instructions[ip + 1 ..].iter().enumerate() {
                     debug!("  > {:?}", inst);

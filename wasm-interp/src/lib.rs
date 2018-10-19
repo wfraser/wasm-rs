@@ -159,6 +159,18 @@ macro_rules! popt {
     }
 }
 
+macro_rules! binop {
+    ($stack:expr, $valty:path, $op:tt, $cast:ty, $transform:expr) => {
+        {
+            let b = popt!($stack, $valty)? as $cast;
+            let a = popt!($stack, $valty)? as $cast;
+            let c = a $op b;
+            debug!(concat!("{} ", stringify!($op), " {} = {}"), a, b, c);
+            $stack.push($transform(c));
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ControlEntry {
     label: Label,
@@ -591,85 +603,31 @@ impl ModuleEnvironment {
                     debug!("{} == 0 = {:?}", x, x == 0);
                     stack.push(boolean(x == 0));
                 }
-                Instruction::I32Eq => {
-                    let b = popt!(stack, Value::I32)?;
-                    let a = popt!(stack, Value::I32)?;
-                    let c = a == b;
-                    debug!("{} == {} = {:?}", a, b, c);
-                    stack.push(boolean(c));
-                }
-                Instruction::I32Ne => {
-                    let b = popt!(stack, Value::I32)?;
-                    let a = popt!(stack, Value::I32)?;
-                    let c = a != b;
-                    debug!("{} != {} = {:?}", a, b, c);
-                    stack.push(boolean(c));
-                }
+                Instruction::I32Eq  => binop!(stack, Value::I32, ==, i32, boolean),
+                Instruction::I32Ne  => binop!(stack, Value::I32, !=, i32, boolean),
+                Instruction::I32LtS => binop!(stack, Value::I32,  <, i32, boolean),
+                Instruction::I32LtU => binop!(stack, Value::I32,  <, u32, boolean),
+                Instruction::I32GtS => binop!(stack, Value::I32,  >, i32, boolean),
+                Instruction::I32GtU => binop!(stack, Value::I32,  >, u32, boolean),
+                Instruction::I32LeS => binop!(stack, Value::I32, <=, i32, boolean),
+                Instruction::I32LeU => binop!(stack, Value::I32, <=, u32, boolean),
+                Instruction::I32GeS => binop!(stack, Value::I32, >=, i32, boolean),
+                Instruction::I32GeU => binop!(stack, Value::I32, >=, u32, boolean),
 
                 // ...
 
-                Instruction::I32LtS => {
-                    let b = popt!(stack, Value::I32)?;
-                    let a = popt!(stack, Value::I32)?;
-                    let c = a < b;
-                    debug!("{} < {} = {:?}", a, b, a < b);
-                    stack.push(boolean(c));
-                }
-                Instruction::I32LtU => {
-                    let b = popt!(stack, Value::I32)? as u32;
-                    let a = popt!(stack, Value::I32)? as u32;
-                    let c = a < b;
-                    debug!("{} < {} = {:?}", a, b, c);
-                    stack.push(boolean(c));
-                }
+                Instruction::I32Add => binop!(stack, Value::I32, +, i32, Value::I32),
+                Instruction::I32Sub => binop!(stack, Value::I32, -, i32, Value::I32),
+                Instruction::I32Mul => binop!(stack, Value::I32, *, i32, Value::I32),
+                Instruction::I32DivS => binop!(stack, Value::I32, /, i32, Value::I32),
+                Instruction::I32DivU => binop!(stack, Value::I32, /, u32, Value::I32),
 
                 // ...
 
-                Instruction::I32Add => {
-                    let b = popt!(stack, Value::I32)?;
-                    let a = popt!(stack, Value::I32)?;
-                    let c = a + b;
-                    debug!("{} + {} = {}", a, b, c);
-                    stack.push(Value::I32(c));
-                }
-                Instruction::I32Sub => {
-                    let b = popt!(stack, Value::I32)?;
-                    let a = popt!(stack, Value::I32)?;
-                    let c = a - b;
-                    debug!("{} - {} = {}", a, b, c);
-                    stack.push(Value::I32(c));
-                }
-                Instruction::I32Mul => {
-                    let b = popt!(stack, Value::I32)?;
-                    let a = popt!(stack, Value::I32)?;
-                    let c = a * b;
-                    debug!("{} * {} = {}", a, b, c);
-                    stack.push(Value::I32(c));
-                }
-
-                // ...
-
-                Instruction::I32And => {
-                    let b = popt!(stack, Value::I32)?;
-                    let a = popt!(stack, Value::I32)?;
-                    let c = a & b;
-                    debug!("{} & {} = {}", a, b, c);
-                    stack.push(Value::I32(c));
-                }
-                Instruction::I32Or => {
-                    let b = popt!(stack, Value::I32)?;
-                    let a = popt!(stack, Value::I32)?;
-                    let c = a | b;
-                    debug!("{} | {} = {}", a, b, c);
-                    stack.push(Value::I32(c));
-                }
-                Instruction::I32Xor => {
-                    let b = popt!(stack, Value::I32)?;
-                    let a = popt!(stack, Value::I32)?;
-                    let c = a ^ b;
-                    debug!("{} ^ {} = {}", a, b, c);
-                    stack.push(Value::I32(c));
-                }
+                Instruction::I32And => binop!(stack, Value::I32, &, i32, Value::I32),
+                Instruction::I32Or  => binop!(stack, Value::I32, |, i32, Value::I32),
+                Instruction::I32Xor => binop!(stack, Value::I32, ^, i32, Value::I32),
+                Instruction::I32Shl => binop!(stack, Value::I32, <<, i32, Value::I32),
 
                 // ...
 

@@ -100,6 +100,16 @@ pub struct HostEnvironment {
     pub functions: HashMap<String, ImportFunction>,
 }
 
+pub struct MutableState {
+    pub memory: Vec<u8>,
+    pub globals: Vec<GlobalEntry>,
+}
+
+pub struct GlobalEntry {
+    value: Value,
+    mutable: bool,
+}
+
 #[derive(Debug)]
 struct Stack {
     values: Vec<Value>,
@@ -199,7 +209,7 @@ impl ModuleEnvironment {
         }
     }
 
-    pub fn call_function(&mut self, name: &str, args: &[Value], memory: &mut Vec<u8>)
+    pub fn call_function(&mut self, name: &str, args: &[Value], mutable_state: &mut MutableState)
         -> Result<Option<Value>, Error>
     {
         let (kind, idx) = self.exports
@@ -228,7 +238,7 @@ impl ModuleEnvironment {
             stack.push(*arg);
         }
 
-        self.call(idx, &mut stack, memory)?;
+        self.call(idx, &mut stack, mutable_state)?;
 
         if let Some(return_type) = sig.return_type {
             if stack.len() != 1 {
@@ -252,7 +262,9 @@ impl ModuleEnvironment {
         }
     }
 
-    fn call(&self, idx: usize, stack: &mut Stack, memory: &mut Vec<u8>) -> Result<(), Error> {
+    fn call(&self, idx: usize, stack: &mut Stack, mutable_state: &mut MutableState)
+        -> Result<(), Error>
+    {
         let f = self.functions.get(idx).ok_or(Error::Runtime("function index out of range"))?;
 
         if let Some(name) = self.function_name(idx) {
@@ -307,7 +319,7 @@ impl ModuleEnvironment {
                 let mut callee_stack = Stack::new();
 
                 self.call_internal(
-                    instructions, &mut callee_stack, memory, &mut control, &mut locals)?;
+                    instructions, &mut callee_stack, mutable_state, &mut control, &mut locals)?;
 
                 if let Some(typ) = f.signature.return_type {
                     // Last value on the stack is the return value.
@@ -315,18 +327,20 @@ impl ModuleEnvironment {
                         callee_stack.pop().unwrap();
                     }
                     let value = callee_stack.pop()?;
-                    debug!("callee returned {:?}", value);
+                    info!("Returning {:?}", value);
 
                     if value.valuetype() != typ {
                         return Err(Error::Runtime("wrong value type returned from function"));
                     }
 
                     stack.push(value);
+                } else {
+                    info!("Returning void");
                 }
             }
             FunctionDefinition::Import(lambda) => {
                 info!("imported function, {:?}", f.signature);
-                Self::call_import(&f.signature, lambda, stack, memory)?;
+                Self::call_import(&f.signature, lambda, stack, mutable_state)?;
             }
         }
 
@@ -337,7 +351,7 @@ impl ModuleEnvironment {
         &self,
         instructions: &[Instruction],
         stack: &mut Stack,
-        memory: &mut Vec<u8>,
+        state: &mut MutableState,
         control: &mut Vec<ControlEntry>,
         locals: &mut [Value],
         ) -> Result<(), Error>
@@ -369,7 +383,7 @@ impl ModuleEnvironment {
                         signature: *return_type,
                     });
                 }
-                Instruction::If(return_type) => {
+                Instruction::If(_return_type) => {
                     //TODO
                     unimplemented!();
                 }
@@ -419,7 +433,7 @@ impl ModuleEnvironment {
                 }
                 Instruction::Call(idx) => {
                     debug!("Call {}", idx);
-                    self.call(*idx as usize, stack, memory)?;
+                    self.call(*idx as usize, stack, state)?;
                 }
                 Instruction::CallIndirect(type_idx) => {
                     // pop, interpret as fn index, compare signatures
@@ -430,7 +444,7 @@ impl ModuleEnvironment {
                     unimplemented!();
                 }
                 Instruction::Return => {
-                    info!("Returning from function");
+                    debug!("Returning from function");
                     return Ok(());
                 }
                 Instruction::Drop => {
@@ -476,8 +490,22 @@ impl ModuleEnvironment {
                         .ok_or(Error::Runtime("attempt to set a local out of bounds"))?;
                     *local = val;
                 }
-
-                // TODO: more instructions
+                Instruction::GetGlobal(idx) => {
+                    let entry = state.globals.get(*idx as usize)
+                        .ok_or(Error::Runtime("attempt to get a global out of bounds"))?;
+                    debug!("got global {}: {:?}", idx, entry.value);
+                    stack.push(entry.value);
+                }
+                Instruction::SetGlobal(idx) => {
+                    let entry = state.globals.get_mut(*idx as usize)
+                        .ok_or(Error::Runtime("attempt to set a global out of bounds"))?;
+                    if !entry.mutable {
+                        return Err(Error::Runtime("attempt to set an immutable global"));
+                    }
+                    let value = stack.pop()?;
+                    debug!("setting global {} from {:?} to {:?}", idx, entry.value, value);
+                    entry.value = value;
+                }
 
                 Instruction::I32Load(arg) => {
                     let mut value = 0u32;
@@ -488,7 +516,7 @@ impl ModuleEnvironment {
                     let addr = base + offset;
 
                     for i in 0 .. 4 {
-                        value |= (memory[addr + i] as u32) << (8 * i);
+                        value |= (state.memory[addr + i] as u32) << (8 * i);
                     }
                     debug!("loaded {}i32 from ({:#x}+{:#x}={:#x})", value as i32, base, offset, addr);
                     stack.push(Value::I32(value as i32));
@@ -500,7 +528,7 @@ impl ModuleEnvironment {
                     let offset = arg.offset as usize;
                     let base = popt!(stack, Value::I32)? as usize;
                     let addr = base + offset;
-                    let value = memory[addr] as i8 as i32;
+                    let value = state.memory[addr] as i8 as i32;
                     debug!("loaded {}u8 from ({:#x}+{:#x}={:#x})", value, base, offset, addr);
                     stack.push(Value::I32(value));
                 }
@@ -508,7 +536,7 @@ impl ModuleEnvironment {
                     let offset = arg.offset as usize;
                     let base = popt!(stack, Value::I32)? as usize;
                     let addr = base + offset;
-                    let value = memory[addr] as u32;
+                    let value = state.memory[addr] as u32;
                     debug!("loaded {}u8 from ({:#x}+{:#x}={:#x})", value, base, offset, addr);
                     stack.push(Value::I32(value as i32));
                 }
@@ -522,7 +550,7 @@ impl ModuleEnvironment {
                     let addr = base + offset;
                     debug!("storing {} to ({:#x}+{:#x}={:#x})", value, base, offset, addr);
                     for i in 0 .. 4 {
-                        memory[addr + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
+                        state.memory[addr + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
                     }
                 }
                 Instruction::I64Store(arg) => {
@@ -532,7 +560,7 @@ impl ModuleEnvironment {
                     let addr = base + offset;
                     debug!("storing {} to ({:#x}+{:#x}={:#x})", value, base, offset, addr);
                     for i in 0 .. 8 {
-                        memory[addr + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
+                        state.memory[addr + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
                     }
                 }
 
@@ -544,7 +572,7 @@ impl ModuleEnvironment {
                     let offset = arg.offset as usize;
                     let addr = base + offset;
                     debug!("storing {} to ({:#x}+{:#x}={:#x})", value, base, offset, addr);
-                    memory[addr] = value;
+                    state.memory[addr] = value;
                 }
 
                 // ...
@@ -660,7 +688,7 @@ impl ModuleEnvironment {
         signature: &module::FuncType,
         lambda: &ImportFunction,
         stack: &mut Stack,
-        memory: &mut Vec<u8>,
+        _mutable_state: &mut MutableState,
         ) -> Result<(), Error>
     {
         let mut args = vec![];
@@ -811,9 +839,27 @@ impl ::std::fmt::Debug for ModuleEnvironment {
     }
 }
 
+fn eval_initializer(code: &[Instruction], globals: &[GlobalEntry]) -> Result<Value, Error> {
+    let value = match code {
+        [Instruction::I32Const(n)] => Value::I32(*n),
+        [Instruction::I64Const(n)] => Value::I64(*n),
+        [Instruction::F32Const(n)] => Value::F32(*n),
+        [Instruction::F64Const(n)] => Value::F64(*n),
+        [Instruction::GetGlobal(idx)] => {
+            globals.get(*idx as usize)
+                .ok_or(Error::Instantiation("initializer from global is out of range"))?
+                .value
+        }
+        _ => {
+            return Err(Error::Instantiation("invalid code in initializer expression"));
+        }
+    };
+    Ok(value)
+}
+
 // TODO: need to represent and pass in the external environment somehow
 pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
-    -> Result<(ModuleEnvironment, Vec<u8>), Error>
+    -> Result<(ModuleEnvironment, MutableState), Error>
 {
     let module = Module::read(r).map_err(|(e, offset)| match e {
         wasm_binary::Error::IO(e) => Error::IO(e),
@@ -841,6 +887,22 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
         memory.resize(mem_limits.initial_len as usize * PAGE_SIZE, 0);
     }
 
+    let mut globals = vec![];
+    for (i, global) in module.globals.iter().enumerate() {
+        debug!("global {}: {:?}", i, global);
+        let inst = global.init.instructions()?;
+        debug!("  init: {:?}", inst);
+        let value = eval_initializer(&inst, &globals)?;
+        if value.valuetype() != global.typ.content_type {
+            return Err(Error::Instantiation("wrong type returned by initializer for global"));
+        }
+        debug!("  value: {:?}", value);
+        globals.push(GlobalEntry {
+            value,
+            mutable: global.typ.mutable,
+        });
+    }
+
     for segment in &module.data {
         debug!("processing data segment");
         if segment.index != 0 {
@@ -849,32 +911,22 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
 
         let offset_code = segment.offset.instructions()?;
 
-        let offset = match offset_code[..] {
-            // The spec says this needs to evaluate to an i32, so...
-            [Instruction::I32Const(offset)] => {
-                if offset < 0 {
+        let offset = match eval_initializer(&offset_code, &globals) {
+            Ok(Value::I32(n)) => {
+                if n >= 0 {
+                    n as usize
+                } else {
                     return Err(Error::Instantiation("data segment offset is negative"));
                 }
-                offset as usize
             }
-            [Instruction::I64Const(_)]
-                | [Instruction::F32Const(_)]
-                | [Instruction::F64Const(_)] =>
-            {
+            Ok(_) => {
                 return Err(Error::Instantiation(
-                    "data segment offset initializer expression returns the wrong type"));
+                        "data segment offset initializer expression returns the wrong type"));
             }
-            [Instruction::GetGlobal(_index)] => {
-                return Err(Error::Instantiation(
-                    "loading data segment offsets from imports isn't supported yet"));
-            }
-            _ => {
-                return Err(Error::Instantiation(
-                    "invalid code in data segment offset initializer expression"));
-            }
+            Err(e) => return Err(e)
         };
 
-        debug!("{:?} -> {}, {}", offset_code, offset, segment.data.len());
+        debug!("{:?} -> {} bytes @ {:#x}", offset_code, segment.data.len(), offset);
 
         memory.as_mut_slice()[offset .. offset + segment.data.len()]
             .copy_from_slice(&segment.data);
@@ -928,7 +980,6 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
     }
 
     // TODO: table instantiation
-    // TODO: global instantiation
     // TODO: build exports map
 
     let mut exports = HashMap::new();
@@ -955,5 +1006,8 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
                 exports,
                 symtab,
             },
-            memory))
+            MutableState {
+                memory,
+                globals,
+            }))
 }

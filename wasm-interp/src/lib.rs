@@ -159,14 +159,38 @@ macro_rules! popt {
     }
 }
 
-macro_rules! binop {
-    ($stack:expr, $valty:path, $op:tt, $cast:ty, $transform:expr) => {
+macro_rules! binop_bool {
+    ($stack:expr, $valty:path, $cast:ty, $op:tt) => {
         {
             let b = popt!($stack, $valty)? as $cast;
             let a = popt!($stack, $valty)? as $cast;
             let c = a $op b;
             debug!(concat!("{} ", stringify!($op), " {} = {}"), a, b, c);
-            $stack.push($transform(c));
+            $stack.push(boolean(c));
+        }
+    }
+}
+
+macro_rules! binop {
+    ($stack:expr, $valty_in:path, $cast_in:tt, $op:tt, $valty_out:path, $cast_out:tt) => {
+        {
+            let b = popt!($stack, $valty_in)? as $cast_in;
+            let a = popt!($stack, $valty_in)? as $cast_in;
+            let c = a $op b;
+            debug!(concat!("{} ", stringify!($op), " {} = {}"), a, b, c);
+            $stack.push($valty_out(c as $cast_out));
+        }
+    }
+}
+
+macro_rules! binop_m {
+    ($stack:expr, $valty_in:path, $cast_in:tt, $method:tt, $valty_out:path, $cast_out:tt) => {
+        {
+            let b = popt!($stack, $valty_in)? as $cast_in;
+            let a = popt!($stack, $valty_in)? as $cast_in;
+            let c = a.$method(b);
+            debug!(concat!("{} ", stringify!($method), " {} = {}"), a, b, c);
+            $stack.push($valty_out(c as $cast_out));
         }
     }
 }
@@ -603,31 +627,53 @@ impl ModuleEnvironment {
                     debug!("{} == 0 = {:?}", x, x == 0);
                     stack.push(boolean(x == 0));
                 }
-                Instruction::I32Eq  => binop!(stack, Value::I32, ==, i32, boolean),
-                Instruction::I32Ne  => binop!(stack, Value::I32, !=, i32, boolean),
-                Instruction::I32LtS => binop!(stack, Value::I32,  <, i32, boolean),
-                Instruction::I32LtU => binop!(stack, Value::I32,  <, u32, boolean),
-                Instruction::I32GtS => binop!(stack, Value::I32,  >, i32, boolean),
-                Instruction::I32GtU => binop!(stack, Value::I32,  >, u32, boolean),
-                Instruction::I32LeS => binop!(stack, Value::I32, <=, i32, boolean),
-                Instruction::I32LeU => binop!(stack, Value::I32, <=, u32, boolean),
-                Instruction::I32GeS => binop!(stack, Value::I32, >=, i32, boolean),
-                Instruction::I32GeU => binop!(stack, Value::I32, >=, u32, boolean),
+                Instruction::I32Eq  => binop_bool!(stack, Value::I32, i32, ==),
+                Instruction::I32Ne  => binop_bool!(stack, Value::I32, i32, !=),
+                Instruction::I32LtS => binop_bool!(stack, Value::I32, i32, <),
+                Instruction::I32LtU => binop_bool!(stack, Value::I32, u32, <),
+                Instruction::I32GtS => binop_bool!(stack, Value::I32, i32, >),
+                Instruction::I32GtU => binop_bool!(stack, Value::I32, u32, >),
+                Instruction::I32LeS => binop_bool!(stack, Value::I32, i32, <=),
+                Instruction::I32LeU => binop_bool!(stack, Value::I32, u32, <=),
+                Instruction::I32GeS => binop_bool!(stack, Value::I32, i32, >=),
+                Instruction::I32GeU => binop_bool!(stack, Value::I32, u32, >=),
 
                 // ...
 
-                Instruction::I32Add => binop!(stack, Value::I32, +, i32, Value::I32),
-                Instruction::I32Sub => binop!(stack, Value::I32, -, i32, Value::I32),
-                Instruction::I32Mul => binop!(stack, Value::I32, *, i32, Value::I32),
-                Instruction::I32DivS => binop!(stack, Value::I32, /, i32, Value::I32),
-                Instruction::I32DivU => binop!(stack, Value::I32, /, u32, Value::I32),
+                Instruction::I32Add  => binop!(stack, Value::I32, i32, +, Value::I32, i32),
+                Instruction::I32Sub  => binop!(stack, Value::I32, i32, -, Value::I32, i32),
+                Instruction::I32Mul  => binop!(stack, Value::I32, i32, *, Value::I32, i32),
+                Instruction::I32DivS => binop!(stack, Value::I32, i32, /, Value::I32, i32),
+                Instruction::I32DivU => binop!(stack, Value::I32, u32, /, Value::I32, i32),
 
                 // ...
 
-                Instruction::I32And => binop!(stack, Value::I32, &, i32, Value::I32),
-                Instruction::I32Or  => binop!(stack, Value::I32, |, i32, Value::I32),
-                Instruction::I32Xor => binop!(stack, Value::I32, ^, i32, Value::I32),
-                Instruction::I32Shl => binop!(stack, Value::I32, <<, i32, Value::I32),
+                Instruction::I32Clz => {
+                    let x = popt!(stack, Value::I32)?;
+                    let n = x.leading_zeros();
+                    debug!("{} leading zeroes = {}", x, n);
+                    stack.push(Value::I32(n as i32));
+                }
+                Instruction::I32Ctz => {
+                    let x = popt!(stack, Value::I32)?;
+                    let n = x.trailing_zeros();
+                    debug!("{} trailing zeroes = {}", x, n);
+                    stack.push(Value::I32(n as i32));
+                }
+                Instruction::I32PopCnt => {
+                    let x = popt!(stack, Value::I32)?;
+                    let n = x.count_ones();
+                    debug!("{} popcnt = {}", x, n);
+                    stack.push(Value::I32(n as i32));
+                }
+                Instruction::I32And => binop!(stack, Value::I32, i32, &, Value::I32, i32),
+                Instruction::I32Or  => binop!(stack, Value::I32, i32, |, Value::I32, i32),
+                Instruction::I32Xor => binop!(stack, Value::I32, i32, ^, Value::I32, i32),
+                Instruction::I32Shl => binop!(stack, Value::I32, i32, <<, Value::I32, i32),
+                Instruction::I32ShrS => binop!(stack, Value::I32, i32, >>, Value::I32, i32),
+                Instruction::I32ShrU => binop!(stack, Value::I32, u32, >>, Value::I32, i32),
+                Instruction::I32Rotl => binop_m!(stack, Value::I32, u32, rotate_left, Value::I32, i32),
+                Instruction::I32Rotr => binop_m!(stack, Value::I32, u32, rotate_right, Value::I32, i32),
 
                 // ...
 

@@ -260,23 +260,32 @@ impl ModuleEnvironment {
                 // Set up the locals with zero values of the appropriate types and counts
                 let mut locals = vec![];
                 for param_type in &f.signature.param_types {
-                    let val = stack.pop()?;
-                    debug!("adding param to locals: {:?}", val);
-                    if val.valuetype() != *param_type {
-                        return Err(Error::Runtime("wrong value type passed as parameter"));
-                    }
-
-                    debug!("local var name {:?}",
-                        self.local_name(idx, stack.len()).unwrap_or("<unnamed>"));
-
-                    locals.push(val);
+                    debug!("adding empty {:?} arg value as local {} {:?}",
+                        param_type,
+                        locals.len(),
+                        self.local_name(idx, locals.len()).unwrap_or("<unnamed>"));
+                    locals.push(Self::zero_value(*param_type));
                 }
-
                 for local in local_specs {
                     for _ in 0 .. local.count {
-                        debug!("adding empty {:?} value to locals", local.typ);
+                        debug!("adding empty {:?} value as local {} {:?}",
+                            local.typ,
+                            locals.len(),
+                            self.local_name(idx, locals.len()).unwrap_or("<unnamed>"));
                         locals.push(Self::zero_value(local.typ));
                     }
+                }
+
+                // Load parameters from the stack into locals
+                let num_locals = f.signature.param_types.len();
+                for i in 0 .. num_locals {
+                    let val = stack.pop()?;
+                    let slot = locals.get_mut(num_locals - i - 1).unwrap();
+                    if val.valuetype() != slot.valuetype() {
+                        return Err(Error::Runtime("parameter type mismatch"));
+                    }
+                    debug!("Setting local {} to parameter value {:?}", num_locals - i - 1, val);
+                    *slot = val;
                 }
 
                 let mut control = vec![ControlEntry {
@@ -319,7 +328,6 @@ impl ModuleEnvironment {
                 }
                 Instruction::Nop => (),
                 Instruction::Block(return_type) => {
-                    debug!("block returning {:?}", return_type);
                     control.push(ControlEntry {
                         label: Label::Unbound,
                         stack_limit: stack.len(),
@@ -327,7 +335,6 @@ impl ModuleEnvironment {
                     });
                 }
                 Instruction::Loop(return_type) => {
-                    debug!("loop returning {:?}", return_type);
                     control.push(ControlEntry {
                         label: Label::Bound(ip),
                         stack_limit: stack.len(),
@@ -335,7 +342,6 @@ impl ModuleEnvironment {
                     });
                 }
                 Instruction::If(return_type) => {
-                    debug!("if block returning {:?}", return_type);
                     //TODO
                     unimplemented!();
                 }
@@ -444,12 +450,16 @@ impl ModuleEnvironment {
 
                 Instruction::I32Load(arg) => {
                     let mut value = 0u32;
+
                     // TODO: what about the alignment?
                     let offset = arg.offset as usize;
+                    let base = popt!(stack, Value::I32)? as usize;
+                    let addr = base + offset;
+
                     for i in 0 .. 4 {
-                        value |= (memory[offset + i] as u32) << (8 * i);
+                        value |= (memory[addr + i] as u32) << (8 * i);
                     }
-                    debug!("loaded {} from {:#x}", value as i32, offset);
+                    debug!("loaded {} from ({:#x}+{:#x}={:#x})", value as i32, base, offset, addr);
                     stack.push(Value::I32(value as i32));
                 }
 
@@ -457,10 +467,12 @@ impl ModuleEnvironment {
 
                 Instruction::I32Store(arg) => {
                     let value = popt!(stack, Value::I32)?;
+                    let base = popt!(stack, Value::I32)? as usize;
                     let offset = arg.offset as usize;
-                    debug!("storing {} to {:#x}", value, offset);
+                    let addr = base + offset;
+                    debug!("storing {} to ({:#x}+{:#x}={:#x})", value, base, offset, addr);
                     for i in 0 .. 4 {
-                        memory[offset + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
+                        memory[addr + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
                     }
                 }
 
@@ -479,8 +491,8 @@ impl ModuleEnvironment {
                 }
 
                 Instruction::I32Eq => {
-                    let a = popt!(stack, Value::I32)?;
                     let b = popt!(stack, Value::I32)?;
+                    let a = popt!(stack, Value::I32)?;
                     debug!("{} == {} = {:?}", a, b, a == b);
                     stack.push(Value::I32(if a == b { 1 } else { 0 }));
                 }
@@ -488,8 +500,8 @@ impl ModuleEnvironment {
                 // ...
 
                 Instruction::I32LtS => {
-                    let a: i32 = popt!(stack, Value::I32)?;
                     let b = popt!(stack, Value::I32)?;
+                    let a = popt!(stack, Value::I32)?;
                     debug!("{} < {} = {:?}", a, b, a < b);
                     stack.push(Value::I32(if a < b { 1 } else { 0 }));
                 }
@@ -497,19 +509,15 @@ impl ModuleEnvironment {
                 // ...
 
                 Instruction::I32Add => {
-                    match (stack.pop()?, stack.pop()?) {
-                        (Value::I32(a), Value::I32(b)) => {
-                            debug!("I32Add: {} + {} -> {}", a, b, a + b);
-                            stack.push(Value::I32(a + b));
-                        }
-                        _ => {
-                            return Err(Error::Runtime("argument wrong type for I32Add"));
-                        }
-                    }
+                    let b = popt!(stack, Value::I32)?;
+                    let a = popt!(stack, Value::I32)?;
+                    let c = a + b;
+                    debug!("{} + {} = {}", a, b, c);
+                    stack.push(Value::I32(c));
                 }
                 Instruction::I32Sub => {
-                    let a = popt!(stack, Value::I32)?;
                     let b = popt!(stack, Value::I32)?;
+                    let a = popt!(stack, Value::I32)?;
                     let c = a - b;
                     debug!("{} - {} = {}", a, b, c);
                     stack.push(Value::I32(c));
@@ -518,15 +526,15 @@ impl ModuleEnvironment {
                 // ...
 
                 Instruction::I32And => {
-                    let a = popt!(stack, Value::I32)?;
                     let b = popt!(stack, Value::I32)?;
+                    let a = popt!(stack, Value::I32)?;
                     let c = a & b;
                     debug!("{} & {} = {}", a, b, c);
                     stack.push(Value::I32(c));
                 }
                 Instruction::I32Xor => {
-                    let a = popt!(stack, Value::I32)?;
                     let b = popt!(stack, Value::I32)?;
+                    let a = popt!(stack, Value::I32)?;
                     let c = a ^ b;
                     debug!("{} ^ {} = {}", a, b, c);
                     stack.push(Value::I32(c));

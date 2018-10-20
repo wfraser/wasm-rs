@@ -195,6 +195,25 @@ macro_rules! binop_m {
     }
 }
 
+macro_rules! load {
+    ($arg:expr, $stack:expr, $state:expr, $raw:ty, $prim:ty, $valty:path) => {
+        {
+            let mut value: $raw = <$raw as Default>::default();
+
+            let offset = $arg.offset as usize;
+            let base = popt!($stack, Value::I32)? as usize;
+            let addr = base + offset;
+
+            for i in 0 .. std::mem::size_of::<$raw>() {
+                value |= ($state.memory[addr + i] as $raw) << (8 * i);
+            }
+            debug!(concat!("loaded {}", stringify!($prim), " from ({:#x}+{:#x}={:#x})"),
+                value as $prim, base, offset, addr);
+            $stack.push($valty(value as $prim));
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ControlEntry {
     label: Label,
@@ -543,41 +562,22 @@ impl ModuleEnvironment {
                     entry.value = value;
                 }
 
-                Instruction::I32Load(arg) => {
-                    let mut value = 0u32;
+                Instruction::I32Load(arg) => load!(arg, stack, state, u32, i32, Value::I32),
+                Instruction::I64Load(arg) => load!(arg, stack, state, u64, i64, Value::I64),
+                Instruction::F32Load(arg) => load!(arg, stack, state, u32, f32, Value::F32),
+                Instruction::F64Load(arg) => load!(arg, stack, state, u64, f64, Value::F64),
 
-                    // TODO: what about the alignment?
-                    let offset = arg.offset as usize;
-                    let base = popt!(stack, Value::I32)? as usize;
-                    let addr = base + offset;
+                Instruction::I32Load8S(arg)  => load!(arg, stack, state,  i8, i32, Value::I32),
+                Instruction::I32Load8U(arg)  => load!(arg, stack, state,  u8, i32, Value::I32),
+                Instruction::I32Load16S(arg) => load!(arg, stack, state, i16, i32, Value::I32),
+                Instruction::I32Load16U(arg) => load!(arg, stack, state, u16, i32, Value::I32),
 
-                    for i in 0 .. 4 {
-                        value |= (state.memory[addr + i] as u32) << (8 * i);
-                    }
-                    debug!("loaded {}i32 from ({:#x}+{:#x}={:#x})", value as i32, base, offset, addr);
-                    stack.push(Value::I32(value as i32));
-                }
-
-                // ...
-
-                Instruction::I32Load8S(arg) => {
-                    let offset = arg.offset as usize;
-                    let base = popt!(stack, Value::I32)? as usize;
-                    let addr = base + offset;
-                    let value = state.memory[addr] as i8 as i32;
-                    debug!("loaded {}u8 from ({:#x}+{:#x}={:#x})", value, base, offset, addr);
-                    stack.push(Value::I32(value));
-                }
-                Instruction::I32Load8U(arg) => {
-                    let offset = arg.offset as usize;
-                    let base = popt!(stack, Value::I32)? as usize;
-                    let addr = base + offset;
-                    let value = state.memory[addr] as u32;
-                    debug!("loaded {}u8 from ({:#x}+{:#x}={:#x})", value, base, offset, addr);
-                    stack.push(Value::I32(value as i32));
-                }
-
-                // ...
+                Instruction::I64Load8S(arg)  => load!(arg, stack, state,  i8, i64, Value::I64),
+                Instruction::I64Load8U(arg)  => load!(arg, stack, state,  u8, i64, Value::I64),
+                Instruction::I64Load16S(arg) => load!(arg, stack, state, i16, i64, Value::I64),
+                Instruction::I64Load16U(arg) => load!(arg, stack, state, u16, i64, Value::I64),
+                Instruction::I64Load32S(arg) => load!(arg, stack, state, i32, i64, Value::I64),
+                Instruction::I64Load32U(arg) => load!(arg, stack, state, u32, i64, Value::I64),
 
                 Instruction::I32Store(arg) => {
                     let value = popt!(stack, Value::I32)?;
@@ -619,8 +619,12 @@ impl ModuleEnvironment {
                 Instruction::I64Const(value) => {
                     stack.push(Value::I64(*value));
                 }
-
-                // ...
+                Instruction::F32Const(value) => {
+                    stack.push(Value::F32(*value));
+                }
+                Instruction::F64Const(value) => {
+                    stack.push(Value::F64(*value));
+                }
 
                 Instruction::I32Eqz => {
                     let x = popt!(stack, Value::I32)?;

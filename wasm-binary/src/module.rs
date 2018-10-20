@@ -375,7 +375,7 @@ impl From<Option<ValueType>> for BlockType {
 }
 
 /// Types that an element may be.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ElementType {
     Anyfunc,
 }

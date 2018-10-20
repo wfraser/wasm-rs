@@ -249,6 +249,7 @@ enum Label {
 pub struct ModuleEnvironment {
     types: Vec<module::FuncType>,
     functions: Vec<Function>,
+    default_table: Vec<Option<usize>>,
     start: Option<usize>,
     exports: HashMap<String, (module::ExternalKind, usize)>,
     symtab: Option<wasm_binary::name_section::SymbolTable>,
@@ -1017,8 +1018,40 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
         functions.push(f);
     }
 
-    // TODO: table instantiation
-    // TODO: build exports map
+    let mut default_table = vec![];
+    if module.tables.len() > 1 {
+        return Err(Error::Instantiation("only one table may be defined"));
+    }
+    if let Some(table_def) = module.tables.first() {
+        if table_def.element_type != module::ElementType::Anyfunc {
+            return Err(Error::Instantiation("only tables of Anyfunc are supported"));
+        }
+
+        default_table.resize(table_def.limits.initial_len as usize, None);
+    }
+
+    // Note: we use the term "table initializer" here because "element" is confusing.
+    for element in module.elements {
+        debug!("processing table initializer for {}", element.index);
+        if element.index != 0 {
+            return Err(Error::Instantiation("table initializer index is out of range"));
+        }
+        let off_inst = element.offset.instructions()?;
+        let offset = match eval_initializer(&off_inst, &globals)? {
+            Value::I32(v) => v as usize,
+            _ => return Err(Error::Instantiation("table initializer offset is wrong type")),
+        };
+        debug!("{:?} -> {} entries starting at {}", off_inst, element.elements.len(), offset);
+        if offset + element.elements.len() > default_table.len() {
+            return Err(Error::Instantiation(
+                    "table initializer goes out of the bounds of its table"));
+        }
+        for (i, idx) in element.elements.iter().enumerate() {
+            // TODO: check that the index is in bounds of the function table
+            default_table[offset + i] = Some(*idx);
+        }
+    }
+    debug!("default table is {:?}", default_table);
 
     let mut exports = HashMap::new();
     for entry in module.exports {
@@ -1040,6 +1073,7 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
             ModuleEnvironment {
                 types: module.types.clone(),
                 functions,
+                default_table,
                 start: module.start,
                 exports,
                 symtab,

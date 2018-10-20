@@ -196,7 +196,7 @@ macro_rules! binop_m {
 }
 
 macro_rules! load {
-    ($arg:expr, $stack:expr, $state:expr, $raw:ty, $prim:ty, $valty:path) => {
+    ($arg:expr, $stack:expr, $state:expr, $raw:ident, $prim:ty, $valty:path) => {
         {
             let mut value: $raw = <$raw as Default>::default();
 
@@ -209,7 +209,26 @@ macro_rules! load {
             }
             debug!(concat!("loaded {}", stringify!($prim), " from ({:#x}+{:#x}={:#x})"),
                 value as $prim, base, offset, addr);
-            $stack.push($valty(value as $prim));
+            $stack.push($valty($raw::from_le(value) as $prim));
+        }
+    }
+}
+
+macro_rules! store {
+    ($arg:expr, $stack:expr, $state:expr, $raw:ident, $valty:path) => {
+        {
+            let value = popt!($stack, $valty)?;
+            let rawvalue = $raw::to_le(value as $raw);
+
+            let base = popt!($stack, Value::I32)? as usize;
+            let offset = $arg.offset as usize;
+            let addr = base + offset;
+            debug!(concat!("storing {}", stringify!($raw), " ({:#x}) to ({:#x}+{:#x}={:#x})"),
+                value, value as $raw, base, offset, addr);
+
+            for i in 0 .. std::mem::size_of::<$raw>() {
+                $state.memory[addr + i] = ((rawvalue & (0xFF << (8*i))) >> (8*i)) as u8;
+            }
         }
     }
 }
@@ -579,39 +598,22 @@ impl ModuleEnvironment {
                 Instruction::I64Load32S(arg) => load!(arg, stack, state, i32, i64, Value::I64),
                 Instruction::I64Load32U(arg) => load!(arg, stack, state, u32, i64, Value::I64),
 
-                Instruction::I32Store(arg) => {
-                    let value = popt!(stack, Value::I32)?;
-                    let base = popt!(stack, Value::I32)? as usize;
-                    let offset = arg.offset as usize;
-                    let addr = base + offset;
-                    debug!("storing {} to ({:#x}+{:#x}={:#x})", value, base, offset, addr);
-                    for i in 0 .. 4 {
-                        state.memory[addr + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
-                    }
-                }
-                Instruction::I64Store(arg) => {
-                    let value = popt!(stack, Value::I64)?;
-                    let base = popt!(stack, Value::I32)? as usize;
-                    let offset = arg.offset as usize;
-                    let addr = base + offset;
-                    debug!("storing {} to ({:#x}+{:#x}={:#x})", value, base, offset, addr);
-                    for i in 0 .. 8 {
-                        state.memory[addr + i] = ((value & (0xFF << (8 * i))) >> (8 * i)) as u8;
-                    }
-                }
+                Instruction::I32Store(arg)   => store!(arg, stack, state, u32, Value::I32),
+                Instruction::I64Store(arg)   => store!(arg, stack, state, u64, Value::I64),
+                Instruction::F32Store(arg)   => store!(arg, stack, state, u32, Value::F32),
+                Instruction::F64Store(arg)   => store!(arg, stack, state, u64, Value::F64),
+                Instruction::I32Store8(arg)  => store!(arg, stack, state,  u8, Value::I32),
+                Instruction::I32Store16(arg) => store!(arg, stack, state, u16, Value::I32),
+                Instruction::I64Store8(arg)  => store!(arg, stack, state,  u8, Value::I64),
+                Instruction::I64Store16(arg) => store!(arg, stack, state, u16, Value::I64),
+                Instruction::I64Store32(arg) => store!(arg, stack, state, u32, Value::I64),
 
-                // ...
-
-                Instruction::I32Store8(arg) => {
-                    let value = popt!(stack, Value::I32)? as u8;
-                    let base = popt!(stack, Value::I32)? as usize;
-                    let offset = arg.offset as usize;
-                    let addr = base + offset;
-                    debug!("storing {} to ({:#x}+{:#x}={:#x})", value, base, offset, addr);
-                    state.memory[addr] = value;
+                Instruction::CurrentMemory => {
+                    stack.push(Value::I32(state.memory.len() as i32));
                 }
-
-                // ...
+                Instruction::GrowMemory => {
+                    unimplemented!(); // TODO
+                }
 
                 Instruction::I32Const(value) => {
                     stack.push(Value::I32(*value));
@@ -642,15 +644,35 @@ impl ModuleEnvironment {
                 Instruction::I32GeS => binop_bool!(stack, Value::I32, i32, >=),
                 Instruction::I32GeU => binop_bool!(stack, Value::I32, u32, >=),
 
-                // ...
+                Instruction::I64Eqz => {
+                    let x = popt!(stack, Value::I64)?;
+                    debug!("{} == 0 = {:?}", x, x == 0);
+                    stack.push(boolean(x == 0));
+                }
+                Instruction::I64Eq  => binop_bool!(stack, Value::I64, i64, ==),
+                Instruction::I64Ne  => binop_bool!(stack, Value::I64, i64, !=),
+                Instruction::I64LtS => binop_bool!(stack, Value::I64, i64, <),
+                Instruction::I64LtU => binop_bool!(stack, Value::I64, u64, <),
+                Instruction::I64GtS => binop_bool!(stack, Value::I64, i64, >),
+                Instruction::I64GtU => binop_bool!(stack, Value::I64, u64, >),
+                Instruction::I64LeS => binop_bool!(stack, Value::I64, i64, <=),
+                Instruction::I64LeU => binop_bool!(stack, Value::I64, u64, <=),
+                Instruction::I64GeS => binop_bool!(stack, Value::I64, i64, >=),
+                Instruction::I64GeU => binop_bool!(stack, Value::I64, u64, >=),
 
-                Instruction::I32Add  => binop!(stack, Value::I32, i32, +, Value::I32, i32),
-                Instruction::I32Sub  => binop!(stack, Value::I32, i32, -, Value::I32, i32),
-                Instruction::I32Mul  => binop!(stack, Value::I32, i32, *, Value::I32, i32),
-                Instruction::I32DivS => binop!(stack, Value::I32, i32, /, Value::I32, i32),
-                Instruction::I32DivU => binop!(stack, Value::I32, u32, /, Value::I32, i32),
+                Instruction::F32Eq => binop_bool!(stack, Value::F32, f32, ==),
+                Instruction::F32Ne => binop_bool!(stack, Value::F32, f32, !=),
+                Instruction::F32Lt => binop_bool!(stack, Value::F32, f32, <),
+                Instruction::F32Gt => binop_bool!(stack, Value::F32, f32, >),
+                Instruction::F32Le => binop_bool!(stack, Value::F32, f32, <=),
+                Instruction::F32Ge => binop_bool!(stack, Value::F32, f32, >=),
 
-                // ...
+                Instruction::F64Eq => binop_bool!(stack, Value::F64, f64, ==),
+                Instruction::F64Ne => binop_bool!(stack, Value::F64, f64, !=),
+                Instruction::F64Lt => binop_bool!(stack, Value::F64, f64, <),
+                Instruction::F64Gt => binop_bool!(stack, Value::F64, f64, >),
+                Instruction::F64Le => binop_bool!(stack, Value::F64, f64, <=),
+                Instruction::F64Ge => binop_bool!(stack, Value::F64, f64, >=),
 
                 Instruction::I32Clz => {
                     let x = popt!(stack, Value::I32)?;
@@ -670,10 +692,18 @@ impl ModuleEnvironment {
                     debug!("{} popcnt = {}", x, n);
                     stack.push(Value::I32(n as i32));
                 }
-                Instruction::I32And => binop!(stack, Value::I32, i32, &, Value::I32, i32),
-                Instruction::I32Or  => binop!(stack, Value::I32, i32, |, Value::I32, i32),
-                Instruction::I32Xor => binop!(stack, Value::I32, i32, ^, Value::I32, i32),
-                Instruction::I32Shl => binop!(stack, Value::I32, i32, <<, Value::I32, i32),
+                // TODO: should these use the wrapping versions of the operations?
+                Instruction::I32Add  => binop!(stack, Value::I32, i32, +, Value::I32, i32),
+                Instruction::I32Sub  => binop!(stack, Value::I32, i32, -, Value::I32, i32),
+                Instruction::I32Mul  => binop!(stack, Value::I32, i32, *, Value::I32, i32),
+                Instruction::I32DivS => binop!(stack, Value::I32, i32, /, Value::I32, i32), // TODO: check for divide by zero and overflow
+                Instruction::I32DivU => binop!(stack, Value::I32, u32, /, Value::I32, i32), // TODO: check for divide by zero
+                Instruction::I32RemS => binop!(stack, Value::I32, i32, %, Value::I32, i32), // TODO: check for divide by zero
+                Instruction::I32RemU => binop!(stack, Value::I32, u32, %, Value::I32, i32), // TODO: check for divide by zero
+                Instruction::I32And  => binop!(stack, Value::I32, i32, &, Value::I32, i32),
+                Instruction::I32Or   => binop!(stack, Value::I32, i32, |, Value::I32, i32),
+                Instruction::I32Xor  => binop!(stack, Value::I32, i32, ^, Value::I32, i32),
+                Instruction::I32Shl  => binop!(stack, Value::I32, i32, <<, Value::I32, i32),
                 Instruction::I32ShrS => binop!(stack, Value::I32, i32, >>, Value::I32, i32),
                 Instruction::I32ShrU => binop!(stack, Value::I32, u32, >>, Value::I32, i32),
                 Instruction::I32Rotl => binop_m!(stack, Value::I32, u32, rotate_left, Value::I32, i32),

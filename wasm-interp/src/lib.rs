@@ -135,7 +135,7 @@ impl Stack {
 
     pub fn last(&self) -> Result<Value, Error> {
         match self.values.last() {
-            Some(value) => Ok(value.clone()),
+            Some(value) => Ok(*value),
             None => Err(Error::Runtime("stack underflow")),
         }
     }
@@ -375,7 +375,7 @@ impl ModuleEnvironment {
                 let num_locals = f.signature.param_types.len();
                 for i in 0 .. num_locals {
                     let val = stack.pop()?;
-                    let slot = locals.get_mut(num_locals - i - 1).unwrap();
+                    let slot = &mut locals[num_locals - i - 1];
                     if val.valuetype() != slot.valuetype() {
                         return Err(Error::Runtime("parameter type mismatch"));
                     }
@@ -422,6 +422,7 @@ impl ModuleEnvironment {
         Ok(())
     }
 
+    #[cfg_attr(feature="cargo-clippy", allow(cast_lossless, cyclomatic_complexity, float_cmp))]
     fn call_internal(
         &self,
         instructions: &[Instruction],
@@ -546,10 +547,9 @@ impl ModuleEnvironment {
 
                 Instruction::GetLocal(idx) => {
                     let val = locals.get(*idx)
-                        .ok_or(Error::Runtime("attempt to get a local out of bounds"))?
-                        .clone();
+                        .ok_or(Error::Runtime("attempt to get a local out of bounds"))?;
                     debug!("get local {}: {:?}", idx, val);
-                    stack.push(val);
+                    stack.push(*val);
                 }
                 Instruction::SetLocal(idx) => {
                     let val = stack.pop()?;

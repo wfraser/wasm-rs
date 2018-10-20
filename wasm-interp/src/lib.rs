@@ -103,6 +103,7 @@ pub struct HostEnvironment {
 pub struct MutableState {
     pub memory: Vec<u8>,
     pub globals: Vec<GlobalEntry>,
+    pub vm_steps: u64, // number of steps the VM has made; for debugging
 }
 
 pub struct GlobalEntry {
@@ -438,7 +439,9 @@ impl ModuleEnvironment {
             let inst = instructions.get(ip)
                 .ok_or(Error::Runtime("instruction pointer out of bounds"))?;
 
-            trace!("{}: {:?}", ip, inst);
+            trace!("{}: {}: {:?}", state.vm_steps, ip, inst);
+            state.vm_steps += 1;
+
             match inst {
                 Instruction::Unreachable => {
                     error!("entered unreachable code!");
@@ -1081,5 +1084,6 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
             MutableState {
                 memory,
                 globals,
+                vm_steps: 0,
             }))
 }

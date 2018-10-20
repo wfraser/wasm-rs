@@ -519,8 +519,14 @@ impl ModuleEnvironment {
                     let signature = self.types.get(*type_idx as usize)
                         .ok_or(Error::Runtime("type index out of bounds for indirect call"))?;
                     debug!("CallIndirect with type signature {:?}", signature);
-                    //TODO
-                    unimplemented!();
+                    let table_idx = popt!(stack, Value::I32)? as usize;
+                    debug!("  table index = {}", table_idx);
+                    let idx = self.default_table.get(table_idx)
+                        .ok_or(Error::Runtime("indirect call out of table bounds"))?
+                        .ok_or(Error::Runtime("indirect call to null table entry"))?;
+                    debug!("  table entry is {}", idx);
+                    //TODO: validate the function type against the signature
+                    self.call(idx, stack, state)?;
                 }
                 Instruction::Return => {
                     debug!("Returning from function");

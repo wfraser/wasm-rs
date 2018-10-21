@@ -240,7 +240,7 @@ macro_rules! store {
 struct ControlEntry {
     label: Label,
     stack_limit: usize,
-    signature: module::BlockType,
+    return_type: module::BlockType,
 }
 
 #[derive(Debug)]
@@ -390,7 +390,7 @@ impl ModuleEnvironment {
                 let mut control = vec![ControlEntry {
                     label: Label::Bound(instructions.len()),
                     stack_limit: 0,
-                    signature: module::BlockType::from(f.signature.return_type)
+                    return_type: module::BlockType::from(f.signature.return_type)
                 }];
 
                 // Callee gets its own fresh value stack.
@@ -454,14 +454,14 @@ impl ModuleEnvironment {
                     control.push(ControlEntry {
                         label: Label::Unbound,
                         stack_limit: stack.len(),
-                        signature: *return_type,
+                        return_type: *return_type,
                     });
                 }
                 Instruction::Loop(return_type) => {
                     control.push(ControlEntry {
                         label: Label::Bound(ip),
                         stack_limit: stack.len(),
-                        signature: *return_type,
+                        return_type: *return_type,
                     });
                 }
                 Instruction::If(_return_type) => {
@@ -801,6 +801,15 @@ impl ModuleEnvironment {
         let entry = control.last()
             .ok_or(Error::Runtime("control stack underflow"))?;
         debug!("control stack entry: {:?}", entry);
+
+        match entry.return_type {
+            module::BlockType::Void => (),
+
+            // TODO: implement return values from blocks
+            // We're supposed to pop the value off the stack, check it against the return type,
+            // then trim the stack according to stack_limit, then push it back on the stack.
+            _ => unimplemented!("non-void blocks"),
+        }
 
         while stack.len() > entry.stack_limit {
             let value = stack.pop()?;

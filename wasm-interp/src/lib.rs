@@ -866,16 +866,35 @@ impl ::std::fmt::Debug for ModuleEnvironment {
                     f.write_str("        definition: FunctionDefinition::Internal {\n")?;
                     f.write_fmt(format_args!("            locals: {:?}\n", locals))?;
                     f.write_fmt(format_args!("            instructions: ({}) [\n", instructions.len()))?;
-                    for i in instructions {
+                    let mut indent = 0;
+                    for (n, i) in instructions.iter().enumerate() {
+                        if let Instruction::Else = i {
+                            indent -= 1;
+                        }
+                        for _ in 0 .. indent {
+                            f.write_str("  ")?;
+                        }
+                        f.write_fmt(format_args!("                {}: ", n))?;
                         match i {
                             Instruction::Call(index) => {
                                 if let Some(name) = self.function_name(*index as usize) {
-                                    f.write_fmt(format_args!("                Call({})\n", name))?;
+                                    f.write_fmt(format_args!("Call({})\n", name))?;
                                 } else {
-                                    f.write_fmt(format_args!("                Call({})\n", index))?;
+                                    f.write_fmt(format_args!("Call({})\n", index))?;
                                 }
                             }
-                            _ => f.write_fmt(format_args!("                {:?}\n", i))?
+                            _ => f.write_fmt(format_args!("{:?}\n", i))?
+                        }
+                        match i {
+                            Instruction::Block(_) | Instruction::Loop(_) | Instruction:: If(_)
+                                | Instruction::Else =>
+                            {
+                                indent += 1;
+                            }
+                            Instruction::End => {
+                                indent -= 1;
+                            }
+                            _ => (),
                         }
                     }
                     f.write_str("            ]\n")?;

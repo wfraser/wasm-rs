@@ -153,25 +153,28 @@ fn main() {
                         // we can implement this ourselves:
                         /*
                         let _fd = unwrap_i32(args[0]);
-                        let iov_addr = unwrap_i32(args[1]) as isize;
-                        let iovcnt = unwrap_i32(args[2]) as isize;
+                        let iov_addr = unwrap_i32(args[1]) as usize;
+                        let iovcnt = unwrap_i32(args[2]) as usize;
 
                         #[repr(C)]
                         #[derive(Debug)]
                         struct Iovec {
+                            // WASM is a 32-bit machine
                             iov_base: u32, // actually void*
-                            iov_len: u32,  // actually usize
+                            iov_len: u32,  // actually size_t
                         }
 
-                        let iovec = unsafe { state.memory.as_ptr().offset(iov_addr) }
+                        let iovec = unsafe { state.memory.as_ptr().add(iov_addr) }
                             as *const Iovec;
 
                         let mut cnt = 0i32;
                         for i in 0 .. iovcnt {
-                            let iov: &Iovec = unsafe { &*iovec.offset(i) };
-                            for j in 0 .. iov.iov_len as isize {
+                            let iov: &Iovec = unsafe { &*iovec.add(i) };
+                            for j in 0 .. iov.iov_len as usize {
                                 let byte: u8 = unsafe {
-                                    *state.memory.as_ptr().offset(iov.iov_base as isize + j)
+                                    *state.memory.as_ptr()
+                                        .add(iov.iov_base as usize)
+                                        .add(j)
                                 };
                                 putc_js(module, state, &[Value::I32(byte as i32)]);
                             }

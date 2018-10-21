@@ -59,12 +59,14 @@ fn boolean(b: bool) -> Value {
 /// Helper function to aid in making the right boxed function type, because rustc's type inference
 /// makes it awkward otherwise.
 pub fn make_import_function<F>(f: F) -> ImportFunction
-    where F: Fn(Vec<Value>) -> Option<Value> + 'static,
+    where F: Fn(&ModuleEnvironment, &mut MutableState, &[Value]) -> Option<Value> + 'static,
 {
     Box::new(f)
 }
 
-pub type ImportFunction = Box<Fn(Vec<Value>) -> Option<Value>>;
+pub type ImportFunction = Box<
+    dyn Fn(&ModuleEnvironment, &mut MutableState, &[Value]) -> Option<Value>
+>;
 
 #[derive(Debug)]
 pub struct Function {
@@ -285,7 +287,7 @@ impl ModuleEnvironment {
         }
     }
 
-    pub fn call_function(&mut self, name: &str, args: &[Value], mutable_state: &mut MutableState)
+    pub fn call_function(&self, name: &str, args: &[Value], mutable_state: &mut MutableState)
         -> Result<Option<Value>, Error>
     {
         let (kind, idx) = self.exports
@@ -310,7 +312,7 @@ impl ModuleEnvironment {
                 return Err(Error::InvalidOperation("wrong argument type(s)"));
             }
         }
-        for arg in args.into_iter().rev() {
+        for arg in args.into_iter() {
             stack.push(*arg);
         }
 
@@ -416,7 +418,7 @@ impl ModuleEnvironment {
             }
             FunctionDefinition::Import(lambda) => {
                 info!("imported function, {:?}", f.signature);
-                Self::call_import(&f.signature, lambda, stack, mutable_state)?;
+                self.call_import(&f.signature, lambda, stack, mutable_state)?;
             }
         }
 
@@ -733,28 +735,32 @@ impl ModuleEnvironment {
     }
 
     fn call_import(
+        &self,
         signature: &module::FuncType,
         lambda: &ImportFunction,
         stack: &mut Stack,
-        _mutable_state: &mut MutableState,
+        state: &mut MutableState,
         ) -> Result<(), Error>
     {
         let mut args = vec![];
         for typ in &signature.param_types {
-            if let Ok(arg) = stack.pop() {
-                if arg.valuetype() != *typ {
-                    return Err(Error::Runtime(
-                            "wrong argument type on the stack for imported function"));
-                }
-                args.push(arg);
-            } else {
-                return Err(Error::Runtime(
-                        "not enough values on the stack for arguments to imported
-                        function"));
-            }
+            args.push(Self::zero_value(*typ));
         }
 
-        let result = lambda(args);
+        let num_args = signature.param_types.len();
+        for i in 0 .. num_args {
+            let val = stack.pop()
+                .map_err(|_| Error::Runtime(
+                    "not enough values on the stack for arguments to imported function"))?;
+            let slot = &mut args[num_args - i - 1];
+            if slot.valuetype() != signature.param_types[i] {
+                return Err(Error::Runtime(
+                            "wrong argument type on the stack for imported function"));
+            }
+            *slot = val;
+        }
+
+        let result = lambda(self, state, &args);
 
         match (result, signature.return_type) {
             (Some(val), Some(typ)) if val.valuetype() == typ => {

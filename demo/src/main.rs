@@ -2,6 +2,8 @@ extern crate wasm_binary;
 extern crate wasm_interp;
 extern crate stderrlog;
 
+use wasm_interp::{ModuleEnvironment, MutableState, Value};
+
 use std::collections::HashMap;
 use std::fs::File;
 
@@ -107,25 +109,113 @@ fn main() {
         }
 
         Mode::Instantiate | Mode::Run => {
-            // This host environment is for the file `hello.wasm`. For now, it's just debugging stubs that
-            // don't even return the right type.
+            // This host environment is for the file `hello.wasm`.
+
             let mut functions = HashMap::new();
-            for f in &["putc_js", "__syscall0", "__syscall1", "__syscall3", "__syscall4", "__syscall5"] {
-                functions.insert(f.to_string(), wasm_interp::make_import_function(move |args| {
-                    println!("{}: {:?}", f, args);
-                    None
-                }));
+
+            fn putc_js(_module: &ModuleEnvironment, _state: &mut MutableState, args: &[Value])
+                -> Option<Value>
+            {
+                let byte = unwrap_i32(args[0]);
+                std::io::Write::write_all(
+                    &mut std::io::stdout(),
+                    &[byte as u8]).unwrap();
+                None
             }
+
+            functions.insert(
+                "putc_js".to_owned(),
+                wasm_interp::make_import_function(putc_js));
+
+            fn unwrap_i32(v: Value) -> i32 {
+                match v {
+                    Value::I32(n) => n,
+                    _ => panic!("wrong type; expected I32, not {:?}", v)
+                }
+            }
+
+            fn syscall(
+                n: i32,
+                module: &ModuleEnvironment,
+                state: &mut MutableState,
+                args: &[Value],
+                ) -> i32
+            {
+                match n {
+                    45 => { // brk
+                        0 // ignore, don't care
+                    }
+                    54 => { // ioctl
+                        0 // ignore, don't care
+                    }
+                    146 => { // writev
+
+                        // we can implement this ourselves:
+                        /*
+                        let _fd = unwrap_i32(args[0]);
+                        let iov_addr = unwrap_i32(args[1]) as isize;
+                        let iovcnt = unwrap_i32(args[2]) as isize;
+
+                        #[repr(C)]
+                        #[derive(Debug)]
+                        struct Iovec {
+                            iov_base: u32, // actually void*
+                            iov_len: u32,  // actually usize
+                        }
+
+                        let iovec = unsafe { state.memory.as_ptr().offset(iov_addr) }
+                            as *const Iovec;
+
+                        let mut cnt = 0i32;
+                        for i in 0 .. iovcnt {
+                            let iov: &Iovec = unsafe { &*iovec.offset(i) };
+                            for j in 0 .. iov.iov_len as isize {
+                                let byte: u8 = unsafe {
+                                    *state.memory.as_ptr().offset(iov.iov_base as isize + j)
+                                };
+                                putc_js(module, state, &[Value::I32(byte as i32)]);
+                            }
+                            cnt += iov.iov_len as i32;
+                        }
+                        cnt
+                        */
+
+                        // or call the version exported by the module:
+                        let result = module.call_function("writev_c", args, state);
+                        unwrap_i32(result.unwrap().unwrap())
+                    }
+                    _ => unimplemented!("syscall {}, args = {:?}", n, args)
+                }
+            }
+
+            fn syscall_n() -> Box<
+                dyn Fn(&ModuleEnvironment, &mut MutableState, &[Value])
+                     -> Option<Value>
+                >
+            {
+                wasm_interp::make_import_function(move |module, state, args| {
+                    let n = match args[0] {
+                        Value::I32(n) => n,
+                        _ => panic!(),
+                    };
+                    Some(Value::I32(syscall(n, module, state, &args[1..])))
+                })
+            }
+
+            for n in 0 .. 6 {
+                functions.insert(format!("__syscall{}", n), syscall_n());
+            }
+
             let env = wasm_interp::HostEnvironment {
                 functions,
             };
-            let (mut module_env, mut memory) = wasm_interp::instantiate_module(&args.file, env).unwrap();
+            let (mut module_env, mut state) = wasm_interp::instantiate_module(&args.file, env).unwrap();
 
             match args.mode {
                 Mode::Instantiate => println!("{:#?}", module_env),
                 Mode::Run => {
                     println!("running the thing");
-                    let result = module_env.call_function("main", &[], &mut memory).unwrap();
+                    let result = module_env.call_function("main", &[], &mut state).unwrap();
                     println!("result = {:?}", result);
                 }
                 _ => unreachable!()

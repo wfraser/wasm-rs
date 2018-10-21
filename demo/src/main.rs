@@ -109,7 +109,7 @@ fn main() {
         }
 
         Mode::Instantiate | Mode::Run => {
-            // This host environment is for the file `hello.wasm`.
+            // This host environment is for the file `main.wasm` in `helloworld/out`.
 
             let mut functions = HashMap::new();
 

@@ -56,17 +56,7 @@ fn boolean(b: bool) -> Value {
     }
 }
 
-/// Helper function to aid in making the right boxed function type, because rustc's type inference
-/// makes it awkward otherwise.
-pub fn make_import_function<F>(f: F) -> ImportFunction
-    where F: Fn(&ModuleEnvironment, &mut MutableState, &[Value]) -> Option<Value> + 'static,
-{
-    Box::new(f)
-}
-
-pub type ImportFunction = Box<
-    dyn Fn(&ModuleEnvironment, &mut MutableState, &[Value]) -> Option<Value>
->;
+pub type ImportFunction = Fn(&ModuleEnvironment, &mut MutableState, &[Value]) -> Option<Value>;
 
 #[derive(Debug)]
 pub struct Function {
@@ -79,7 +69,7 @@ enum FunctionDefinition {
         locals: Vec<module::LocalEntry>,
         instructions: Vec<Instruction>,
     },
-    Import(ImportFunction),
+    Import(Box<ImportFunction>),
 }
 
 impl ::std::fmt::Debug for FunctionDefinition {
@@ -99,7 +89,7 @@ impl ::std::fmt::Debug for FunctionDefinition {
 }
 
 pub struct HostEnvironment {
-    pub functions: HashMap<String, ImportFunction>,
+    pub functions: HashMap<String, Box<ImportFunction>>,
 }
 
 pub struct MutableState {
@@ -312,7 +302,7 @@ impl ModuleEnvironment {
                 return Err(Error::InvalidOperation("wrong argument type(s)"));
             }
         }
-        for arg in args.into_iter() {
+        for arg in args {
             stack.push(*arg);
         }
 
@@ -418,7 +408,9 @@ impl ModuleEnvironment {
             }
             FunctionDefinition::Import(lambda) => {
                 info!("imported function, {:?}", f.signature);
-                self.call_import(&f.signature, lambda, stack, mutable_state)?;
+                // FIXME: figure out how to write this w/o explicit call to Deref...
+                let lambda_ref: &ImportFunction = std::ops::Deref::deref(lambda);
+                self.call_import(&f.signature, lambda_ref, stack, mutable_state)?;
             }
         }
 

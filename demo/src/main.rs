@@ -2,7 +2,7 @@ extern crate wasm_binary;
 extern crate wasm_interp;
 extern crate stderrlog;
 
-use wasm_interp::{ModuleEnvironment, MutableState, Value};
+use wasm_interp::{ModuleEnvironment, MutableState, ImportFunction, Value};
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -111,7 +111,7 @@ fn main() {
         Mode::Instantiate | Mode::Run => {
             // This host environment is for the file `main.wasm` in `helloworld/out`.
 
-            let mut functions = HashMap::new();
+            let mut functions = HashMap::<String, Box<ImportFunction>>::new();
 
             fn putc_js(_module: &ModuleEnvironment, _state: &mut MutableState, args: &[Value])
                 -> Option<Value>
@@ -123,9 +123,7 @@ fn main() {
                 None
             }
 
-            functions.insert(
-                "putc_js".to_owned(),
-                wasm_interp::make_import_function(putc_js));
+            functions.insert("putc_js".to_owned(), Box::new(putc_js));
 
             fn unwrap_i32(v: Value) -> i32 {
                 match v {
@@ -191,12 +189,8 @@ fn main() {
                 }
             }
 
-            fn syscall_n() -> Box<
-                dyn Fn(&ModuleEnvironment, &mut MutableState, &[Value])
-                     -> Option<Value>
-                >
-            {
-                wasm_interp::make_import_function(move |module, state, args| {
+            fn syscall_n() -> Box<ImportFunction> {
+                Box::new(|module, state, args| {
                     let n = match args[0] {
                         Value::I32(n) => n,
                         _ => panic!(),

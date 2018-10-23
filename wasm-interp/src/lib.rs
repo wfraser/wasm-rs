@@ -69,7 +69,10 @@ enum FunctionDefinition {
         locals: Vec<module::LocalEntry>,
         instructions: Vec<Instruction>,
     },
-    Import(Box<ImportFunction>),
+    Import {
+        name: String,
+        lambda: Box<ImportFunction>,
+    },
 }
 
 impl ::std::fmt::Debug for FunctionDefinition {
@@ -81,8 +84,8 @@ impl ::std::fmt::Debug for FunctionDefinition {
                     .field("instructions", instructions)
                     .finish()
             }
-            FunctionDefinition::Import(_) => {
-                f.write_str("FunctionDefinition::Import(_)\n")
+            FunctionDefinition::Import { name, .. } => {
+                f.write_fmt(format_args!("FunctionDefinition::Import({}, ..)\n", name))
             }
         }
     }
@@ -368,11 +371,11 @@ impl ModuleEnvironment {
     {
         let f = self.functions.get(idx).ok_or(Error::Runtime("function index out of range"))?;
 
-        info!("running function {}:{}", idx, self.function_name_txt(idx));
+        info!("function {}:{}", idx, self.function_name_txt(idx));
 
         match &f.definition {
             FunctionDefinition::Internal { locals: ref local_specs, ref instructions } => {
-                info!("internal function, {:?}, locals: {:?}", f.signature, local_specs);
+                debug!("internal function, {:?}, locals: {:?}", f.signature, local_specs);
 
                 // Set up the locals with zero values of the appropriate types and counts
                 let mut locals = vec![];
@@ -415,6 +418,9 @@ impl ModuleEnvironment {
                 // Callee gets its own fresh value stack.
                 let mut callee_stack = Stack::new();
 
+                info!("Calling internal {}:{}({:?})",
+                    idx, self.function_name_txt(idx), &locals[0 .. f.signature.param_types.len()]);
+
                 self.call_internal(
                     instructions, &mut callee_stack, mutable_state, &mut control, &mut locals)?;
 
@@ -435,11 +441,11 @@ impl ModuleEnvironment {
                     info!("Returning void from {}:{}", idx, self.function_name_txt(idx));
                 }
             }
-            FunctionDefinition::Import(lambda) => {
-                info!("imported function, {:?}", f.signature);
+            FunctionDefinition::Import { name, lambda } => {
+                debug!("imported function, {:?}", f.signature);
                 // FIXME: figure out how to write this w/o explicit call to Deref...
                 let lambda_ref: &ImportFunction = std::ops::Deref::deref(lambda);
-                self.call_import(&f.signature, lambda_ref, stack, mutable_state)?;
+                self.call_import(name, &f.signature, lambda_ref, stack, mutable_state)?;
             }
         }
 
@@ -757,6 +763,7 @@ impl ModuleEnvironment {
 
     fn call_import(
         &self,
+        name: &str,
         signature: &module::FuncType,
         lambda: &ImportFunction,
         stack: &mut Stack,
@@ -781,13 +788,17 @@ impl ModuleEnvironment {
             *slot = val;
         }
 
+        info!("Calling import {}({:?})", name, args);
         let result = lambda(self, state, &args);
 
         match (result, signature.return_type) {
             (Some(val), Some(typ)) if val.valuetype() == typ => {
+                info!("Returning {:?} from import {}", val, name);
                 stack.push(val);
             }
-            (None, None) => (),
+            (None, None) => {
+                info!("Returning void from import {}", name);
+            }
             (Some(_), Some(_)) => {
                 return Err(Error::Runtime(
                         "imported function returned a value of the wrong type"));
@@ -930,8 +941,9 @@ impl ::std::fmt::Debug for ModuleEnvironment {
                     f.write_str("            ]\n")?;
                     f.write_str("        }\n")?;
                 },
-                FunctionDefinition::Import(_) => {
-                    f.write_str("        definition: FunctionDefinition::Import(_)\n")?;
+                FunctionDefinition::Import { ref name, .. } => {
+                    f.write_fmt(format_args!(
+                            "        definition: FunctionDefinition::Import({}, ..)\n", name))?;
                 }
             }
             f.write_str("    }\n")?;
@@ -1049,7 +1061,10 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
                         "import type index out of bounds"))?;
                 let f = Function {
                     signature,
-                    definition: FunctionDefinition::Import(def),
+                    definition: FunctionDefinition::Import {
+                        name: import.field_name.clone(),
+                        lambda: def,
+                    },
                 };
                 functions.push(f);
             } else {

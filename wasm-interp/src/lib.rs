@@ -152,14 +152,21 @@ macro_rules! popt {
     }
 }
 
+// These next macros use an inner function to reduce stack usage on debug builds, because
+// otherwise, ModuleEnvironment::call_internal ends up having zillions of local variables.
+
 macro_rules! binop_bool {
     ($stack:expr, $valty:path, $cast:ty, $op:tt) => {
         {
-            let b = popt!($stack, $valty)? as $cast;
-            let a = popt!($stack, $valty)? as $cast;
-            let c = a $op b;
-            debug!(concat!("{} ", stringify!($op), " {} = {}"), a, b, c);
-            $stack.push(boolean(c));
+            fn f(stack: &mut Stack) -> Result<(), Error> {
+                let b = popt!(stack, $valty)? as $cast;
+                let a = popt!(stack, $valty)? as $cast;
+                let c = a $op b;
+                debug!(concat!("{} ", stringify!($op), " {} = {}"), a, b, c);
+                stack.push(boolean(c));
+                Ok(())
+            }
+            f($stack)?;
         }
     }
 }
@@ -167,11 +174,15 @@ macro_rules! binop_bool {
 macro_rules! binop {
     ($stack:expr, $valty_in:path, $cast_in:tt, $op:tt, $valty_out:path, $cast_out:tt) => {
         {
-            let b = popt!($stack, $valty_in)? as $cast_in;
-            let a = popt!($stack, $valty_in)? as $cast_in;
-            let c = a $op b;
-            debug!(concat!("{} ", stringify!($op), " {} = {}"), a, b, c);
-            $stack.push($valty_out(c as $cast_out));
+            fn f(stack: &mut Stack) -> Result<(), Error> {
+                let b = popt!(stack, $valty_in)? as $cast_in;
+                let a = popt!(stack, $valty_in)? as $cast_in;
+                let c = a $op b;
+                debug!(concat!("{} ", stringify!($op), " {} = {}"), a, b, c);
+                stack.push($valty_out(c as $cast_out));
+                Ok(())
+            }
+            f($stack)?;
         }
     }
 }
@@ -179,11 +190,15 @@ macro_rules! binop {
 macro_rules! binop_m {
     ($stack:expr, $valty_in:path, $cast_in:tt, $method:tt, $valty_out:path, $cast_out:tt) => {
         {
-            let b = popt!($stack, $valty_in)? as $cast_in;
-            let a = popt!($stack, $valty_in)? as $cast_in;
-            let c = a.$method(b);
-            debug!(concat!("{} ", stringify!($method), " {} = {}"), a, b, c);
-            $stack.push($valty_out(c as $cast_out));
+            fn f(stack: &mut Stack) -> Result<(), Error> {
+                let b = popt!(stack, $valty_in)? as $cast_in;
+                let a = popt!(stack, $valty_in)? as $cast_in;
+                let c = a.$method(b);
+                debug!(concat!("{} ", stringify!($method), " {} = {}"), a, b, c);
+                stack.push($valty_out(c as $cast_out));
+                Ok(())
+            }
+            f($stack)?;
         }
     }
 }
@@ -191,18 +206,25 @@ macro_rules! binop_m {
 macro_rules! load {
     ($arg:expr, $stack:expr, $state:expr, $raw:ident, $prim:ty, $valty:path) => {
         {
-            let mut value: $raw = <$raw as Default>::default();
+            fn f(arg: &wasm_binary::instructions::MemoryImmediate,
+                stack: &mut Stack,
+                state: &MutableState,
+            ) -> Result<(), Error> {
+                let mut value: $raw = <$raw as Default>::default();
 
-            let offset = $arg.offset as usize;
-            let base = popt!($stack, Value::I32)? as usize;
-            let addr = base + offset;
+                let offset = arg.offset as usize;
+                let base = popt!(stack, Value::I32)? as usize;
+                let addr = base + offset;
 
-            for i in 0 .. std::mem::size_of::<$raw>() {
-                value |= ($state.memory[addr + i] as $raw) << (8 * i);
+                for i in 0 .. std::mem::size_of::<$raw>() {
+                    value |= (state.memory[addr + i] as $raw) << (8 * i);
+                }
+                debug!(concat!("loaded {}", stringify!($prim), " from ({:#x}+{:#x}={:#x})"),
+                    value as $prim, base, offset, addr);
+                stack.push($valty($raw::from_le(value) as $prim));
+                Ok(())
             }
-            debug!(concat!("loaded {}", stringify!($prim), " from ({:#x}+{:#x}={:#x})"),
-                value as $prim, base, offset, addr);
-            $stack.push($valty($raw::from_le(value) as $prim));
+            f($arg, $stack, $state)?;
         }
     }
 }
@@ -210,18 +232,25 @@ macro_rules! load {
 macro_rules! store {
     ($arg:expr, $stack:expr, $state:expr, $raw:ident, $valty:path) => {
         {
-            let value = popt!($stack, $valty)?;
-            let rawvalue = $raw::to_le(value as $raw);
+            fn f(arg: &wasm_binary::instructions::MemoryImmediate,
+                stack: &mut Stack,
+                state: &mut MutableState,
+            ) -> Result<(), Error> {
+                let value = popt!(stack, $valty)?;
+                let rawvalue = $raw::to_le(value as $raw);
 
-            let base = popt!($stack, Value::I32)? as usize;
-            let offset = $arg.offset as usize;
-            let addr = base + offset;
-            debug!(concat!("storing {}", stringify!($raw), " ({:#x}) to ({:#x}+{:#x}={:#x})"),
-                value, value as $raw, base, offset, addr);
+                let base = popt!(stack, Value::I32)? as usize;
+                let offset = arg.offset as usize;
+                let addr = base + offset;
+                debug!(concat!("storing {}", stringify!($raw), " ({:#x}) to ({:#x}+{:#x}={:#x})"),
+                    value, value as $raw, base, offset, addr);
 
-            for i in 0 .. std::mem::size_of::<$raw>() {
-                $state.memory[addr + i] = ((rawvalue & (0xFF << (8*i))) >> (8*i)) as u8;
+                for i in 0 .. std::mem::size_of::<$raw>() {
+                    state.memory[addr + i] = ((rawvalue & (0xFF << (8*i))) >> (8*i)) as u8;
+                }
+                Ok(())
             }
+            f($arg, $stack, $state)?;
         }
     }
 }

@@ -287,6 +287,10 @@ impl ModuleEnvironment {
         Some(name)
     }
 
+    fn function_name_txt(&self, index: usize) -> &str {
+        self.function_name(index).unwrap_or("<unnamed>")
+    }
+
     fn local_name(&self, fn_index: usize, local_index: usize) -> Option<&str> {
         let name = self.symtab.as_ref()?
             .functions.as_ref()?
@@ -364,11 +368,7 @@ impl ModuleEnvironment {
     {
         let f = self.functions.get(idx).ok_or(Error::Runtime("function index out of range"))?;
 
-        if let Some(name) = self.function_name(idx) {
-            info!("running function {}", name);
-        } else {
-            info!("running unnamed function {}", idx);
-        }
+        info!("running function {}:{}", idx, self.function_name_txt(idx));
 
         match &f.definition {
             FunctionDefinition::Internal { locals: ref local_specs, ref instructions } => {
@@ -424,7 +424,7 @@ impl ModuleEnvironment {
                         callee_stack.pop().unwrap();
                     }
                     let value = callee_stack.pop()?;
-                    info!("Returning {:?}", value);
+                    info!("Returning {:?} from {}:{}", value, idx, self.function_name_txt(idx));
 
                     if value.valuetype() != typ {
                         return Err(Error::Runtime("wrong value type returned from function"));
@@ -432,7 +432,7 @@ impl ModuleEnvironment {
 
                     stack.push(value);
                 } else {
-                    info!("Returning void");
+                    info!("Returning void from {}:{}", idx, self.function_name_txt(idx));
                 }
             }
             FunctionDefinition::Import(lambda) => {
@@ -888,8 +888,8 @@ impl ::std::fmt::Debug for ModuleEnvironment {
         // Rather than delegating to FunctionDefinition's Debug impl here, iterate over and print
         // the code ourselves. This lets us try to use symbol table info to include names of things.
         for (i, fun) in self.functions.iter().enumerate() {
-            let name = self.function_name(i).unwrap_or("?");
-            f.write_fmt(format_args!("    Function {} ({}): {{\n", i, name))?;
+            let name = self.function_name_txt(i);
+            f.write_fmt(format_args!("    Function {}:{}: {{\n", i, name))?;
             f.write_fmt(format_args!("        signature: {:?}\n", fun.signature))?;
             match fun.definition {
                 FunctionDefinition::Internal { ref locals, ref instructions } => {

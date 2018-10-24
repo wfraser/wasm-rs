@@ -95,6 +95,14 @@ pub struct HostEnvironment {
     pub functions: HashMap<String, Box<ImportFunction>>,
 }
 
+impl HostEnvironment {
+    pub fn new() -> HostEnvironment {
+        HostEnvironment {
+            functions: HashMap::new(),
+        }
+    }
+}
+
 pub struct MutableState {
     pub memory: Vec<u8>,
     pub globals: Vec<GlobalEntry>,
@@ -1139,14 +1147,23 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
 
     let symtab = module.custom_sections
         .iter()
-        .find(|section| section.name == "name")
-        .and_then(|section| wasm_binary::name_section::SymbolTable::from_bytes(
+        .find(|section| {
+            if section.name == "name" {
+                true
+            } else {
+                debug!("unused custom section {:?}", section);
+                false
+            }
+        })
+        .and_then(|section| {
+            wasm_binary::name_section::SymbolTable::from_bytes(
                 &section.payload)
-            .map_err(|e| {
-                error!("unable to parse symbol table from name section: {:?}", e);
-                e
-            })
-            .ok());
+                .map_err(|e| {
+                    error!("unable to parse symbol table from name section: {:?}", e);
+                    e
+                })
+                .ok()
+        });
 
     Ok((
             ModuleEnvironment {

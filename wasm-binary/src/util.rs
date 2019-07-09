@@ -1,6 +1,5 @@
-use Error;
+use crate::Error;
 use std::io;
-use leb128;
 
 pub fn read_varu32<R: io::Read>(r: R) -> Result<u32, Error> {
     let mut r = r.take(5); // ceil(32 / 7)

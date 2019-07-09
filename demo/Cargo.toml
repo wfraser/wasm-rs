@@ -2,6 +2,7 @@
 name = "demo"
 version = "0.1.0"
 authors = ["Bill Fraser <wfraser@codewise.org>"]
+edition = "2018"
 
 [dependencies]
 stderrlog = "0.4"

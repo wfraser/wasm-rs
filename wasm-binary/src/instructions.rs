@@ -1,6 +1,6 @@
-use Error;
-use module::{self, BlockType};
-use util::{read_varu32, read_varu1, read_vari32, read_vari64, read_f32, read_f64};
+use crate::Error;
+use crate::module::{self, BlockType};
+use crate::util::{read_varu32, read_varu1, read_vari32, read_vari64, read_f32, read_f64};
 use num_traits::FromPrimitive;
 use std::io;
 

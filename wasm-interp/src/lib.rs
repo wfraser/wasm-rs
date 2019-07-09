@@ -1,12 +1,13 @@
-#[macro_use] extern crate log;
+#![deny(rust_2018_idioms)]
 
-extern crate wasm_binary;
 use wasm_binary::Module;
 use wasm_binary::module::{self, ValueType};
 use wasm_binary::instructions::{self, Instruction};
 
 use std::collections::HashMap;
 use std::io;
+
+use log::*;
 
 const PAGE_SIZE: usize = 64 * 1024;
 
@@ -56,7 +57,7 @@ fn boolean(b: bool) -> Value {
     }
 }
 
-pub type ImportFunction = Fn(&ModuleEnvironment, &mut MutableState, &[Value]) -> Option<Value>;
+pub type ImportFunction = dyn Fn(&ModuleEnvironment, &mut MutableState, &[Value]) -> Option<Value>;
 
 #[derive(Debug)]
 pub struct Function {
@@ -76,7 +77,7 @@ enum FunctionDefinition {
 }
 
 impl ::std::fmt::Debug for FunctionDefinition {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
             FunctionDefinition::Internal { locals, instructions } => {
                 f.debug_struct("FunctionDefinition::Internal")
@@ -91,16 +92,9 @@ impl ::std::fmt::Debug for FunctionDefinition {
     }
 }
 
+#[derive(Default)]
 pub struct HostEnvironment {
     pub functions: HashMap<String, Box<ImportFunction>>,
-}
-
-impl HostEnvironment {
-    pub fn new() -> HostEnvironment {
-        HostEnvironment {
-            functions: HashMap::new(),
-        }
-    }
 }
 
 pub struct MutableState {
@@ -460,7 +454,7 @@ impl ModuleEnvironment {
         Ok(())
     }
 
-    #[cfg_attr(feature="cargo-clippy", allow(cast_lossless, cyclomatic_complexity, float_cmp))]
+    #[allow(clippy::cognitive_complexity, clippy::float_cmp)]
     fn call_internal(
         &self,
         instructions: &[Instruction],
@@ -901,7 +895,7 @@ impl ModuleEnvironment {
 }
 
 impl ::std::fmt::Debug for ModuleEnvironment {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         f.write_str("ModuleEnvironment {\n")?;
 
         // Rather than delegating to FunctionDefinition's Debug impl here, iterate over and print

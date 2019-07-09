@@ -1,7 +1,3 @@
-extern crate wasm_binary;
-extern crate wasm_interp;
-extern crate stderrlog;
-
 use wasm_interp::{ModuleEnvironment, MutableState, ImportFunction, Value};
 
 use std::collections::HashMap;
@@ -206,7 +202,7 @@ fn main() {
             let env = wasm_interp::HostEnvironment {
                 functions,
             };
-            let (mut module_env, mut state) = wasm_interp::instantiate_module(&args.file, env).unwrap();
+            let (module_env, mut state) = wasm_interp::instantiate_module(&args.file, env).unwrap();
 
             match args.mode {
                 Mode::Instantiate => println!("{:#?}", module_env),

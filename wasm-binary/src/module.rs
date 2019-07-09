@@ -1,11 +1,10 @@
 //! Structures representing the innards of a WASM module.
 
-use Error;
-use instructions::Opcode;
+use crate::Error;
+use crate::instructions::{Instruction, Opcode};
+use crate::util::{read_string, read_varu1, read_varu32};
 use std::io;
 use num_traits::FromPrimitive;
-use instructions::Instruction;
-use util::{read_string, read_varu1, read_varu32};
 
 /// The magic cookie present at the start of all WASM files. Looks like `"\0ASM"`.
 pub const MAGIC_COOKIE: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
@@ -654,7 +653,7 @@ impl Read for FunctionBody {
 }
 
 impl ::std::fmt::Debug for FunctionBody {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         f.write_str("FunctionBody {\n")?;
         f.write_fmt(format_args!("    locals: {:?}\n", self.locals))?;
         f.write_str("    code: {")?;
@@ -713,7 +712,7 @@ impl Read for DataSegment {
 }
 
 impl ::std::fmt::Debug for DataSegment {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         f.write_str("DataSegment {\n")?;
         f.write_fmt(format_args!("    index: {}\n", self.index))?;
         f.write_fmt(format_args!("    offset: {:?}\n", self.offset))?;
@@ -748,7 +747,7 @@ impl Read for CustomSection {
 }
 
 impl ::std::fmt::Debug for CustomSection {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         f.write_fmt(format_args!("CustomSection {:?} {{", self.name))?;
         for (i, byte) in self.payload.iter().enumerate() {
             if i % 16 == 0 {
@@ -791,7 +790,7 @@ impl InitializerExpression {
     /// global load, followed by `End` -- future versions of WASM may allow arithmetic as well,
     /// which is why this returns a Vec.
     pub fn instructions(&self) -> Result<Vec<Instruction>, Error> {
-        let mut instructions = ::instructions::read_instructions(&self.bytes)?;
+        let mut instructions = crate::instructions::read_instructions(&self.bytes)?;
         if instructions.pop() != Some(Instruction::End) {
             return Err(Error::Invalid("initializer expression must end with End"));
         }

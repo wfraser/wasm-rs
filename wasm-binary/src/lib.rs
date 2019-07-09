@@ -1,6 +1,6 @@
+#![deny(rust_2018_idioms)]
+
 #[macro_use] extern crate enum_primitive_derive;
-extern crate leb128;
-extern crate num_traits;
 
 pub mod instructions;
 pub mod module;

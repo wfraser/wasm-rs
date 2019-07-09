@@ -68,7 +68,7 @@ fn main() {
 
     println!("{} + {}", a, b);
 
-    let host_environment = wasm_interp::HostEnvironment::new();
+    let host_environment = wasm_interp::HostEnvironment::default();
 
     let (module, mut state) = wasm_interp::instantiate_module(
             std::io::Cursor::new(WASM),
@@ -80,7 +80,7 @@ fn main() {
     
     match module.call_function("add", &[Value::I32(a), Value::I32(b)], &mut state) {
         Ok(Some(Value::I32(n))) => {
-            println!("{} + {} = {}", a, b, n);
+            println!("= {}", n);
         }
         Ok(Some(other)) => {
             println!("unexpected result type: {:?}", other);

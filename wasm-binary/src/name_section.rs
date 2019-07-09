@@ -1,9 +1,9 @@
 //! Structures representing the "name" custom section, which provides debugging info in the wasm
 //! file.
 
-use Error;
-use module::Read;
-use util::{read_varu32, read_string};
+use crate::Error;
+use crate::module::Read;
+use crate::util::{read_varu32, read_string};
 use std::io;
 use std::collections::btree_map::*;
 use num_traits::FromPrimitive;

@@ -201,6 +201,8 @@ fn main() {
 
             let env = wasm_interp::HostEnvironment {
                 functions,
+                globals: HashMap::new(),
+                table: vec![],
             };
             let (module_env, mut state) = wasm_interp::instantiate_module(&args.file, env).unwrap();
 

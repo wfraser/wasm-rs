@@ -95,6 +95,8 @@ impl ::std::fmt::Debug for FunctionDefinition {
 #[derive(Default)]
 pub struct HostEnvironment {
     pub functions: HashMap<String, Box<ImportFunction>>,
+    pub globals: HashMap<String, Value>,
+    pub table: Vec<Option<usize>>,
 }
 
 pub struct MutableState {
@@ -103,6 +105,7 @@ pub struct MutableState {
     pub vm_steps: u64, // number of steps the VM has made; for debugging
 }
 
+#[derive(Debug)]
 pub struct GlobalEntry {
     value: Value,
     mutable: bool,
@@ -493,9 +496,17 @@ impl ModuleEnvironment {
                         return_type: *return_type,
                     });
                 }
-                Instruction::If(_return_type) => {
-                    //TODO
-                    unimplemented!();
+                Instruction::If(return_type) => {
+                    let cond = popt!(stack, Value::I32)? != 0;
+                    debug!("if {:?}", cond);
+                    control.push(ControlEntry {
+                        label: Label::Unbound,
+                        stack_limit: stack.len(),
+                        return_type: *return_type,
+                    });
+                    if !cond {
+                        ip = Self::branch(stack, control, instructions, ip, 0)?;
+                    }
                 }
                 Instruction::Else => {
                     //TODO
@@ -863,18 +874,21 @@ impl ModuleEnvironment {
                 for (i, inst) in instructions[ip + 1 ..].iter().enumerate() {
                     debug!("  > {:?}", inst);
                     match inst {
-                        Instruction::Block(_) | Instruction::Loop(_) => {
+                        Instruction::Block(_) | Instruction::Loop(_) | Instruction::If(_) => {
                             debug!("depth+");
                             depth += 1;
                         }
+                        Instruction::End | Instruction::Else if depth > 0 => {
+                            debug!("depth-");
+                            depth -= 1;
+                        }
+                        Instruction::Else => {
+                            offset = Some(i + 1);
+                            break;
+                        }
                         Instruction::End => {
-                            if depth == 0 {
-                                offset = Some(i);
-                                break;
-                            } else {
-                                debug!("depth-");
-                                depth -= 1;
-                            }
+                            offset = Some(i);
+                            break;
                         }
                         _ => ()
                     }
@@ -974,7 +988,6 @@ fn eval_initializer(code: &[Instruction], globals: &[GlobalEntry]) -> Result<Val
     Ok(value)
 }
 
-// TODO: need to represent and pass in the external environment somehow
 pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
     -> Result<(ModuleEnvironment, MutableState), Error>
 {
@@ -988,12 +1001,65 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
     }
 
     let mut memory = vec![];
+    let mut globals = vec![];
+    let mut default_table = vec![];
     for import in &module.imports {
-        if let wasm_binary::module::ExternalType::Memory(ref mtype) = import.typ {
-            debug!("import memory from {}.{} of size {:?}",
-                import.module_name, import.field_name, mtype.limits);
-            //memory.resize(mtype.limits.initial_len as usize * PAGE_SIZE, 0);
-            return Err(Error::Instantiation("memory imports not yet implemented"));
+        use wasm_binary::module::ExternalType;
+        match &import.typ {
+            ExternalType::Memory(mtype) => {
+                debug!("import memory from {}.{} of size {:?}",
+                    import.module_name, import.field_name, mtype.limits);
+                // FIXME
+                memory.resize(mtype.limits.initial_len as usize * PAGE_SIZE, 0);
+                //return Err(Error::Instantiation("memory imports not yet implemented"));
+            }
+            ExternalType::Global(gtype) => {
+                debug!("global {}: import global from {}.{} of type {:?}",
+                       globals.len(), import.module_name, import.field_name, gtype.content_type);
+
+                let value = host_env.globals.get(&import.field_name)
+                    .ok_or_else(|| {
+                        error!("missing global import {:?} of type {:?}",
+                               import.field_name, gtype.content_type);
+                        Error::MissingImport {
+                            module: import.module_name.clone(),
+                            field: import.field_name.clone(),
+                        }
+                    })?;
+
+                if value.valuetype() != gtype.content_type {
+                    error!("wrong type for global import {:?}: expected {:?}, found {:?}",
+                           import.field_name, gtype.content_type, value.valuetype());
+                    return Err(Error::Instantiation("wrong type for global import"));
+                }
+
+                debug!("  value: {:?}", value);
+                globals.push(GlobalEntry {
+                    value: *value,
+                    mutable: gtype.mutable,
+                });
+            }
+            ExternalType::Table(table_def) => {
+                debug!("import table of {:?} of initial size {} and max size {:?}",
+                       table_def.element_type, table_def.limits.initial_len,
+                       table_def.limits.maximum_len);
+
+                if table_def.element_type != module::ElementType::Anyfunc {
+                    return Err(Error::Instantiation("only tables of Anyfunc are supported"));
+                }
+                if table_def.limits.maximum_len != Some(table_def.limits.initial_len) {
+                    return Err(Error::Instantiation("resizable imported tables are not supported"));
+                }
+
+                if host_env.table.len() != table_def.limits.initial_len as usize {
+                    error!("imported table is wrong size: {}, expected {}",
+                           host_env.table.len(), table_def.limits.initial_len);
+                    return Err(Error::Instantiation("imported table is wrong size"));
+                }
+
+                default_table.extend_from_slice(&host_env.table);
+            }
+            ExternalType::Function(_) => () // handled later
         }
     }
 
@@ -1004,9 +1070,8 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
         memory.resize(mem_limits.initial_len as usize * PAGE_SIZE, 0);
     }
 
-    let mut globals = vec![];
-    for (i, global) in module.globals.iter().enumerate() {
-        debug!("global {}: {:?}", i, global);
+    for global in module.globals.iter() {
+        debug!("global {}: {:?}", globals.len(), global);
         let inst = global.init.instructions()?;
         debug!("  init: {:?}", inst);
         let value = eval_initializer(&inst, &globals)?;
@@ -1070,7 +1135,7 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
                 };
                 functions.push(f);
             } else {
-                // todo: make errors take a String so you know what
+                // TODO: make errors take a String so you know what
                 return Err(Error::MissingImport {
                     module: "env".to_string(),
                     field: import.field_name.clone(),
@@ -1099,7 +1164,6 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
         functions.push(f);
     }
 
-    let mut default_table = vec![];
     if module.tables.len() > 1 {
         return Err(Error::Instantiation("only one table may be defined"));
     }
@@ -1124,6 +1188,7 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
         };
         debug!("{:?} -> {} entries starting at {}", off_inst, element.elements.len(), offset);
         if offset + element.elements.len() > default_table.len() {
+            error!("{} + {} > {}", offset, element.elements.len(), default_table.len());
             return Err(Error::Instantiation(
                     "table initializer goes out of the bounds of its table"));
         }

@@ -5,6 +5,6 @@ authors = ["Bill Fraser <wfraser@codewise.org>"]
 edition = "2018"
 
 [dependencies]
-stderrlog = "0.4"
+stderrlog = "0.5"
 wasm-binary = { path = "../wasm-binary" }
 wasm-interp = { path = "../wasm-interp" }

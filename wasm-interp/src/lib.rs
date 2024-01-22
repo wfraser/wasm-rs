@@ -548,9 +548,21 @@ impl ModuleEnvironment {
                     }
                 }
                 Instruction::BrTable { target_table, default_target } => {
-                    debug!("BranchTable: ({:?}) default = {}", target_table, default_target);
-                    //TODO
-                    unimplemented!();
+                    debug!("BranchTable: {} entries, ({:?}) default = {}", target_table.len(), target_table, default_target);
+                    let table_idx = popt!(stack, Value::I32)? as usize;
+                    debug!("table index is {}", table_idx);
+                    let num_entries = match target_table.get(table_idx).cloned() {
+                        Some(n) => {
+                            debug!("table entry is {}", n);
+                            n
+                        }
+                        None => {
+                            debug!("table index out of bounds, using default ({})", default_target);
+                            *default_target
+                        }
+                    };
+
+                    ip = Self::branch(stack, control, instructions, ip, num_entries)?;
                 }
                 Instruction::Call(idx) => {
                     debug!("Call {}", idx);
@@ -617,13 +629,13 @@ impl ModuleEnvironment {
                     *local = val;
                 }
                 Instruction::GetGlobal(idx) => {
-                    let entry = state.globals.get(*idx as usize)
+                    let entry = state.globals.get(*idx)
                         .ok_or(Error::Runtime("attempt to get a global out of bounds"))?;
                     debug!("got global {}: {:?}", idx, entry.value);
                     stack.push(entry.value);
                 }
                 Instruction::SetGlobal(idx) => {
-                    let entry = state.globals.get_mut(*idx as usize)
+                    let entry = state.globals.get_mut(*idx)
                         .ok_or(Error::Runtime("attempt to set a global out of bounds"))?;
                     if !entry.mutable {
                         return Err(Error::Runtime("attempt to set an immutable global"));
@@ -977,7 +989,7 @@ fn eval_initializer(code: &[Instruction], globals: &[GlobalEntry]) -> Result<Val
         [Instruction::F32Const(n)] => Value::F32(*n),
         [Instruction::F64Const(n)] => Value::F64(*n),
         [Instruction::GetGlobal(idx)] => {
-            globals.get(*idx as usize)
+            globals.get(*idx)
                 .ok_or(Error::Instantiation("initializer from global is out of range"))?
                 .value
         }
@@ -1065,7 +1077,7 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
 
     // TODO: make sure it doesn't import memory and also define its own memory.
 
-    if let Some(mem_limits) = module.memory.get(0).map(|section| &section.limits) {
+    if let Some(mem_limits) = module.memory.first().map(|section| &section.limits) {
         debug!("memory {:?}", mem_limits);
         memory.resize(mem_limits.initial_len as usize * PAGE_SIZE, 0);
     }
@@ -1210,7 +1222,7 @@ pub fn instantiate_module<R: io::Read>(r: R, mut host_env: HostEnvironment)
             if section.name == "name" {
                 true
             } else {
-                debug!("unused custom section {:?}", section);
+                //debug!("unused custom section {:?}", section);
                 false
             }
         })

@@ -208,7 +208,7 @@ pub enum Opcode {
 }
 
 impl Opcode {
-    pub fn from_u8(byte: u8) -> Result<Self, Error> {
+    pub fn from_byte(byte: u8) -> Result<Self, Error> {
         <Self as FromPrimitive>::from_u8(byte)
             .ok_or(Error::Invalid("invalid opcode"))
     }
@@ -414,7 +414,7 @@ impl module::Read for Instruction {
     fn read<R: io::Read>(mut r: R) -> Result<Self, Error> {
         let mut buf = [0u8];
         r.read_exact(&mut buf).map_err(Error::IO)?;
-        let op = Opcode::from_u8(buf[0])?;
+        let op = Opcode::from_byte(buf[0])?;
         Ok(match op {
             Opcode::Unreachable => Instruction::Unreachable,
             Opcode::Nop => Instruction::Nop,

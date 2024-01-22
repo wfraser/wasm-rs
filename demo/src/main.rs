@@ -18,7 +18,7 @@ struct Args {
 
 fn parse_args() -> Option<Args> {
     let mut args = std::env::args().skip(1);
-    let mode = match args.next().as_ref().map(|s| s.as_str()) {
+    let mode = match args.next().as_deref() {
         Some("--help") | Some("-h") | None => {
             return None;
         }
@@ -199,10 +199,35 @@ fn main() {
                 functions.insert(format!("__syscall{}", n), syscall_n());
             }
 
+            for n in [140, 146, 54, 6].iter().cloned() {
+                functions.insert(
+                    format!("___syscall{}", n),
+                    Box::new(move |module, state, args| {
+                        Some(Value::I32(syscall(n, module, state, args)))
+                    }),
+                );
+            }
+
+            let nil_func = || -> Box<ImportFunction> { Box::new(|_,_,_| None) };
+            for f in &["enlargeMemory", "getTotalMemory", "abortOnCannotGrowMemory",
+                    "abortStackOverflow", "nullFunc_ii", "nullFunc_iiii", "___lock", "___setErrNo",
+                    "___unlock", "_emscripten_memcpy_big"]
+            {
+                functions.insert((*f).into(), nil_func());
+            }
+
+            let mut globals = HashMap::new();
+            globals.insert("STACK_MAX".into(), Value::I32(1000));
+            for name in ["memoryBase", "tableBase", "DYNAMICTOP_PTR", "tempDoublePtr", "ABORT", "STACKTOP"].iter().cloned() {
+                globals.insert(name.into(), Value::I32(0));
+            }
+            globals.insert("NaN".into(), Value::F64(std::f64::NAN));
+            globals.insert("Infinity".into(), Value::F64(std::f64::INFINITY));
+
             let env = wasm_interp::HostEnvironment {
                 functions,
-                globals: HashMap::new(),
-                table: vec![],
+                globals,
+                table: vec![None; 10],
             };
             let (module_env, mut state) = wasm_interp::instantiate_module(&args.file, env).unwrap();
 
@@ -210,7 +235,12 @@ fn main() {
                 Mode::Instantiate => println!("{:#?}", module_env),
                 Mode::Run => {
                     println!("running the thing");
-                    let result = module_env.call_function("main", &[], &mut state).unwrap();
+                    //let result = module_env.call_function("main", &[], &mut state).unwrap();
+                    let result = module_env.call_function(
+                        "_main",
+                        &[Value::I32(0), Value::I32(0)],
+                        &mut state)
+                        .unwrap();
                     println!("result = {:?}", result);
                 }
                 _ => unreachable!()

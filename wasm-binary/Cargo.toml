@@ -5,6 +5,6 @@ authors = ["Bill Fraser <wfraser@codewise.org>"]
 edition = "2018"
 
 [dependencies]
-enum-primitive-derive = "0.1"
+enum-primitive-derive = "0.3"
 leb128 = "0.2"
-num-traits = "0.1"
+num-traits = "0.2"

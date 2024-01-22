@@ -3,7 +3,7 @@ extern crate env_logger;
 extern crate wasm_interp;
 use wasm_interp::Value;
 
-const WASM: &'static [u8] = &[
+const WASM: &[u8] = &[
     0x00, b'a', b's', b'm',                     // "\0asm"
     0x01, 0x00, 0x00, 0x00,                     // version 1
 
